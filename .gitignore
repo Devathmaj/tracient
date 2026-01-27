@@ -140,9 +140,8 @@ ENV/
 # ML model artifacts
 *.pkl
 *.h5
-*.joblib
-ai-model/anomaly_detection_model/anomaly_detection_model.joblib
-ai-model/apl_bpl_model/random_forest_model.joblib
+
+
 
 # ==========================================
 # Docker
