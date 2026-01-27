@@ -12,7 +12,9 @@ import {
   ChevronRight,
   User,
   Building2,
-  IndianRupee
+  IndianRupee,
+  Scan,
+  Loader2
 } from 'lucide-react';
 import { 
   Card, 
@@ -27,6 +29,7 @@ import {
   StatCard
 } from '@/components/common';
 import { formatCurrency, formatDate } from '@/utils/formatters';
+import { API_BASE_URL } from '@/utils/constants';
 
 interface Anomaly {
   id: string;
@@ -176,6 +179,13 @@ const AnomalyAlerts: React.FC = () => {
   const [selectedAnomaly, setSelectedAnomaly] = useState<Anomaly | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState('all');
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanResult, setScanResult] = useState<{
+    totalScanned: number;
+    anomaliesFound: number;
+    newAlertsCreated: number;
+  } | null>(null);
+  const [showScanModal, setShowScanModal] = useState(false);
 
   useEffect(() => {
     const fetchAnomalies = async () => {
@@ -190,6 +200,57 @@ const AnomalyAlerts: React.FC = () => {
     setIsRefreshing(true);
     await new Promise(resolve => setTimeout(resolve, 1500));
     setIsRefreshing(false);
+  };
+
+  const handleRunAnomalyScan = async () => {
+    setIsScanning(true);
+    setScanResult(null);
+    
+    try {
+      const token = localStorage.getItem('authToken');
+      const response = await fetch(`${API_BASE_URL}/government/run-anomaly-scan`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          limit: 100  // Scan up to 100 workers
+        })
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        setScanResult({
+          totalScanned: data.totalScanned,
+          anomaliesFound: data.anomaliesFound,
+          newAlertsCreated: data.newAlertsCreated
+        });
+        
+        // Refresh the anomaly list if new alerts were created
+        if (data.newAlertsCreated > 0) {
+          handleRefresh();
+        }
+      } else {
+        console.error('Scan failed:', data.message);
+        setScanResult({
+          totalScanned: 0,
+          anomaliesFound: 0,
+          newAlertsCreated: 0
+        });
+      }
+    } catch (error) {
+      console.error('Error running anomaly scan:', error);
+      setScanResult({
+        totalScanned: 0,
+        anomaliesFound: 0,
+        newAlertsCreated: 0
+      });
+    } finally {
+      setIsScanning(false);
+      setShowScanModal(true);
+    }
   };
 
   const handleUpdateStatus = (anomalyId: string, newStatus: Anomaly['status']) => {
@@ -298,6 +359,24 @@ const AnomalyAlerts: React.FC = () => {
           <p className="text-gray-500 mt-1">AI-detected anomalies in wage transactions</p>
         </div>
         <div className="flex items-center gap-3">
+          <Button 
+            variant="primary" 
+            onClick={handleRunAnomalyScan} 
+            disabled={isScanning}
+            className="bg-purple-600 hover:bg-purple-700"
+          >
+            {isScanning ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Scanning...
+              </>
+            ) : (
+              <>
+                <Scan className="h-4 w-4 mr-2" />
+                Run AI Scan
+              </>
+            )}
+          </Button>
           <Button variant="outline" onClick={handleRefresh} disabled={isRefreshing}>
             <RefreshCw className={`h-4 w-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
             Refresh
@@ -308,6 +387,57 @@ const AnomalyAlerts: React.FC = () => {
           </Button>
         </div>
       </div>
+
+      {/* Scan Result Modal */}
+      <Modal
+        isOpen={showScanModal}
+        onClose={() => setShowScanModal(false)}
+        title="Anomaly Scan Complete"
+      >
+        <div className="p-4 space-y-4">
+          {scanResult && (
+            <>
+              <div className="grid grid-cols-3 gap-4 text-center">
+                <div className="p-4 bg-blue-50 rounded-lg">
+                  <p className="text-2xl font-bold text-blue-700">{scanResult.totalScanned}</p>
+                  <p className="text-sm text-blue-600">Workers Scanned</p>
+                </div>
+                <div className="p-4 bg-amber-50 rounded-lg">
+                  <p className="text-2xl font-bold text-amber-700">{scanResult.anomaliesFound}</p>
+                  <p className="text-sm text-amber-600">Anomalies Found</p>
+                </div>
+                <div className="p-4 bg-red-50 rounded-lg">
+                  <p className="text-2xl font-bold text-red-700">{scanResult.newAlertsCreated}</p>
+                  <p className="text-sm text-red-600">New Alerts Created</p>
+                </div>
+              </div>
+              
+              {scanResult.newAlertsCreated > 0 ? (
+                <div className="flex items-center gap-2 p-3 bg-green-50 rounded-lg text-green-700">
+                  <CheckCircle2 className="h-5 w-5" />
+                  <span>New anomaly alerts have been created and added to the list.</span>
+                </div>
+              ) : scanResult.anomaliesFound > 0 ? (
+                <div className="flex items-center gap-2 p-3 bg-blue-50 rounded-lg text-blue-700">
+                  <Eye className="h-5 w-5" />
+                  <span>Anomalies detected but alerts already exist for these workers.</span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 p-3 bg-gray-50 rounded-lg text-gray-700">
+                  <Shield className="h-5 w-5" />
+                  <span>No suspicious patterns detected. All workers appear normal.</span>
+                </div>
+              )}
+            </>
+          )}
+          
+          <div className="flex justify-end">
+            <Button onClick={() => setShowScanModal(false)}>
+              Close
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       {/* Stats */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">

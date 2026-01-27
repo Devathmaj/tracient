@@ -1,6 +1,6 @@
 """
-TRACIENT - APL/BPL Classification API
-REST API for household poverty classification using Flask
+TRACIENT - Unified AI API
+REST API for APL/BPL classification AND Income Anomaly Detection using Flask
 """
 
 from flask import Flask, request, jsonify
@@ -8,9 +8,13 @@ from flask_cors import CORS
 import joblib
 import json
 import os
+import sys
 import numpy as np
 import pandas as pd
-from typing import Dict, Any
+from typing import Dict, Any, List
+
+# Add parent directory to path for importing anomaly detection module
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 app = Flask(__name__)
 CORS(app)
@@ -344,11 +348,194 @@ def analyze_secc_criteria(data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 # ============================================================================
-# INITIALIZE MODEL
+# ANOMALY DETECTION - Import from sibling module
 # ============================================================================
 
+# Anomaly detection constants
+ANOMALY_DESCRIPTIONS = {
+    'sudden_spike': '⚠️ SUDDEN SPIKE: Income jumped 3x+ above personal average',
+    'high_volatility': '⚠️ HIGH VOLATILITY: Income varies wildly month-to-month',
+    'irregular_timing': '⚠️ IRREGULAR TIMING: Transactions at unusual hours/weekends',
+    'new_sources': '⚠️ NEW SOURCES: Multiple new income sources appeared suddenly',
+    'round_amounts': '⚠️ ROUND AMOUNTS: Suspiciously round transaction amounts',
+    'structuring': '⚠️ STRUCTURING: Many transactions just below reporting thresholds',
+    'velocity_change': '⚠️ VELOCITY CHANGE: Transaction frequency changed dramatically',
+    'dormant_burst': '⚠️ DORMANT BURST: Large activity after months of inactivity',
+    'pattern_break': '⚠️ PATTERN BREAK: Regular payment pattern suddenly broke',
+    'ghost_income': '⚠️ GHOST INCOME: Income from unverifiable sources',
+    'weekend_heavy': '⚠️ WEEKEND HEAVY: Unusual concentration of weekend transactions',
+}
+
+class AnomalyDetector:
+    """ML-based anomaly detector"""
+    
+    def __init__(self):
+        self.model = None
+        self.scaler = None
+        self.label_encoders = None
+        self.feature_names = None
+        self.is_loaded = False
+    
+    def load(self):
+        """Load model components from anomaly_detection_model directory"""
+        # Path to anomaly detection model directory
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        model_dir = os.path.join(base_dir, 'anomaly_detection_model')
+        
+        try:
+            model_path = os.path.join(model_dir, 'anomaly_detection_model.joblib')
+            scaler_path = os.path.join(model_dir, 'anomaly_scaler.joblib')
+            encoders_path = os.path.join(model_dir, 'anomaly_label_encoders.joblib')
+            features_path = os.path.join(model_dir, 'anomaly_feature_names.json')
+            
+            if os.path.exists(model_path):
+                self.model = joblib.load(model_path)
+            if os.path.exists(scaler_path):
+                self.scaler = joblib.load(scaler_path)
+            if os.path.exists(encoders_path):
+                self.label_encoders = joblib.load(encoders_path)
+            if os.path.exists(features_path):
+                with open(features_path, 'r') as f:
+                    self.feature_names = json.load(f)
+            
+            self.is_loaded = self.model is not None
+            if self.is_loaded:
+                print("✅ Anomaly detection model loaded successfully!")
+            else:
+                print("⚠️ Anomaly detection model not found - using rule-based only")
+            return self.is_loaded
+        except Exception as e:
+            print(f"⚠️ Error loading anomaly model: {e}")
+            return False
+    
+    def preprocess(self, worker_data: Dict, pattern_data: Dict, income_data: Dict) -> np.ndarray:
+        """Preprocess data for prediction using pattern features"""
+        
+        # Combine all data
+        data = {**worker_data, **pattern_data, **income_data}
+        
+        # Encode categorical variables
+        categorical_cols = ['sector', 'income_tier']
+        if self.label_encoders:
+            for col in categorical_cols:
+                if col in self.label_encoders and col in data:
+                    try:
+                        data[col + '_encoded'] = self.label_encoders[col].transform([data[col]])[0]
+                    except:
+                        data[col + '_encoded'] = 0
+        
+        # Create feature vector using pattern-based features
+        feature_vector = []
+        feature_names = self.feature_names if isinstance(self.feature_names, list) else (self.feature_names.get('feature_names', []) if self.feature_names else [])
+        
+        for feature in feature_names:
+            if feature in data:
+                feature_vector.append(data[feature])
+            else:
+                feature_vector.append(0)
+        
+        # Scale features if scaler available
+        X = np.array(feature_vector).reshape(1, -1)
+        if self.scaler:
+            X = self.scaler.transform(X)
+        
+        return X
+    
+    def detect(self, worker_data: Dict, pattern_data: Dict, income_data: Dict) -> Dict[str, Any]:
+        """Detect anomalies based on patterns"""
+        
+        if not self.is_loaded:
+            return {
+                'is_anomaly': False,
+                'anomaly_score': 0,
+                'confidence': 0,
+                'note': 'ML model not available'
+            }
+        
+        X = self.preprocess(worker_data, pattern_data, income_data)
+        
+        # Get prediction
+        if hasattr(self.model, 'predict_proba'):
+            prediction = self.model.predict(X)[0]
+            probabilities = self.model.predict_proba(X)[0]
+            anomaly_score = probabilities[1] * 100
+        else:
+            # For Isolation Forest
+            prediction = self.model.predict(X)[0]
+            prediction = 1 if prediction == -1 else 0
+            anomaly_score = 50 if prediction == 1 else 10
+        
+        return {
+            'is_anomaly': bool(prediction == 1),
+            'anomaly_score': round(anomaly_score, 2),
+            'confidence': round(max(anomaly_score, 100 - anomaly_score), 2),
+        }
+
+
+def rule_based_anomaly_detection(income_data: Dict, pattern_data: Dict) -> List[str]:
+    """Pattern-based anomaly detection using rules"""
+    
+    anomalies = []
+    
+    # 1. Check income volatility (CV > 0.5 is suspicious)
+    if income_data.get('income_cv', 0) > 0.5:
+        anomalies.append('high_volatility')
+    
+    # 2. Check for sudden spikes (>3x month-over-month increase)
+    if income_data.get('max_mom_increase', 0) > 3:
+        anomalies.append('sudden_spike')
+    
+    # 3. Check for pattern breaks (high deviation from personal average)
+    if income_data.get('max_deviation_from_mean', 0) > 2:
+        anomalies.append('pattern_break')
+    
+    # 4. Check for structuring (many transactions near thresholds)
+    if pattern_data.get('near_50k_pct', 0) > 0.3 or pattern_data.get('near_200k_pct', 0) > 0.2:
+        anomalies.append('structuring')
+    
+    # 5. Check for round amount suspicion
+    if pattern_data.get('round_amount_pct', 0) > 0.6:
+        anomalies.append('round_amounts')
+    
+    # 6. Check for unusual timing
+    if pattern_data.get('night_hours_pct', 0) > 0.3 or pattern_data.get('weekend_pct', 0) > 0.5:
+        anomalies.append('irregular_timing')
+    
+    # 7. Check for velocity changes
+    if pattern_data.get('velocity_change', 1) > 3 or pattern_data.get('velocity_change', 1) < 0.3:
+        anomalies.append('velocity_change')
+    
+    # 8. Check for transaction bursts
+    if pattern_data.get('burst_ratio', 1) > 5:
+        anomalies.append('dormant_burst')
+    
+    # 9. Check for new sources suddenly appearing
+    if pattern_data.get('new_source_rate', 0) > 0.5:
+        anomalies.append('new_sources')
+    
+    # 10. Check for low verification
+    if pattern_data.get('unverified_rate', 0) > 0.5:
+        anomalies.append('ghost_income')
+    
+    # 11. Check for excessive weekend transactions
+    if pattern_data.get('weekend_pct', 0) > 0.4:
+        anomalies.append('weekend_heavy')
+    
+    # Remove duplicates
+    return list(set(anomalies))
+
+
+# ============================================================================
+# INITIALIZE MODELS
+# ============================================================================
+
+# APL/BPL Classification Model
 predictor = ModelPredictor()
 model_loaded = predictor.load()
+
+# Anomaly Detection Model
+anomaly_detector = AnomalyDetector()
+anomaly_model_loaded = anomaly_detector.load()
 
 # ============================================================================
 # API ROUTES
@@ -359,7 +546,12 @@ def health_check():
     """Health check endpoint"""
     return jsonify({
         'status': 'healthy',
-        'model_loaded': predictor.is_loaded
+        'bpl_model_loaded': predictor.is_loaded,
+        'anomaly_model_loaded': anomaly_detector.is_loaded,
+        'services': {
+            'bpl_classification': 'available' if predictor.is_loaded else 'unavailable',
+            'anomaly_detection': 'available' if anomaly_detector.is_loaded else 'rule-based only'
+        }
     })
 
 @app.route('/classify', methods=['POST'])
@@ -491,13 +683,202 @@ def batch_classify():
         }), 500
 
 # ============================================================================
+# ANOMALY DETECTION ROUTES
+# ============================================================================
+
+@app.route('/detect-anomaly', methods=['POST'])
+def detect_anomaly():
+    """
+    Detect anomalies in income patterns for a single worker
+    
+    Expected JSON body:
+    {
+        "worker_data": {
+            "sector": "construction",
+            "is_formal": 0,
+            "income_tier": "low",
+            "account_age_months": 24
+        },
+        "pattern_data": {
+            "avg_tx_per_month": 10,
+            "weekend_pct": 0.1,
+            "night_hours_pct": 0.05,
+            "round_amount_pct": 0.15,
+            "near_50k_pct": 0.05,
+            "num_unique_sources": 2,
+            "source_concentration": 0.8,
+            "unverified_rate": 0.2,
+            "velocity_change": 1.0,
+            "burst_ratio": 1.5,
+            "cash_deposit_rate": 0.15
+        },
+        "income_data": {
+            "income_cv": 0.3,
+            "max_mom_increase": 0.5,
+            "max_deviation_from_mean": 0.8,
+            "monthly_incomes": [15000, 16000, 14500, ...]
+        }
+    }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'No data provided'
+            }), 400
+        
+        worker_data = data.get('worker_data', {})
+        pattern_data = data.get('pattern_data', {})
+        income_data = data.get('income_data', {})
+        
+        # Run ML-based detection
+        ml_result = anomaly_detector.detect(worker_data, pattern_data, income_data)
+        
+        # Run rule-based detection
+        rule_anomalies = rule_based_anomaly_detection(income_data, pattern_data)
+        
+        # Combine results
+        is_anomaly = ml_result.get('is_anomaly', False) or len(rule_anomalies) > 0
+        anomaly_score = ml_result.get('anomaly_score', 0)
+        
+        # Boost score based on rule detections
+        if rule_anomalies:
+            rule_boost = min(len(rule_anomalies) * 15, 50)
+            anomaly_score = min(anomaly_score + rule_boost, 100)
+        
+        # Determine severity
+        if anomaly_score >= 80:
+            severity = 'critical'
+        elif anomaly_score >= 60:
+            severity = 'high'
+        elif anomaly_score >= 40:
+            severity = 'medium'
+        else:
+            severity = 'low'
+        
+        return jsonify({
+            'success': True,
+            'is_anomaly': is_anomaly,
+            'anomaly_score': round(anomaly_score, 2),
+            'confidence': ml_result.get('confidence', 0),
+            'severity': severity,
+            'anomaly_types': rule_anomalies,
+            'anomaly_descriptions': [ANOMALY_DESCRIPTIONS.get(a, a) for a in rule_anomalies],
+            'ml_result': ml_result,
+            'detection_method': 'ml_and_rules' if anomaly_detector.is_loaded else 'rules_only'
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/batch-detect-anomaly', methods=['POST'])
+def batch_detect_anomaly():
+    """
+    Detect anomalies for multiple workers at once
+    
+    Expected JSON body:
+    {
+        "workers": [
+            {
+                "worker_id": "WRK001",
+                "worker_data": {...},
+                "pattern_data": {...},
+                "income_data": {...}
+            },
+            ...
+        ]
+    }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data or 'workers' not in data:
+            return jsonify({
+                'success': False,
+                'error': 'Expected { workers: [...] } array'
+            }), 400
+        
+        workers = data.get('workers', [])
+        results = []
+        anomalies_found = 0
+        
+        for worker in workers:
+            worker_id = worker.get('worker_id', 'unknown')
+            worker_data = worker.get('worker_data', {})
+            pattern_data = worker.get('pattern_data', {})
+            income_data = worker.get('income_data', {})
+            
+            # Run ML-based detection
+            ml_result = anomaly_detector.detect(worker_data, pattern_data, income_data)
+            
+            # Run rule-based detection
+            rule_anomalies = rule_based_anomaly_detection(income_data, pattern_data)
+            
+            # Combine results
+            is_anomaly = ml_result.get('is_anomaly', False) or len(rule_anomalies) > 0
+            anomaly_score = ml_result.get('anomaly_score', 0)
+            
+            if rule_anomalies:
+                rule_boost = min(len(rule_anomalies) * 15, 50)
+                anomaly_score = min(anomaly_score + rule_boost, 100)
+            
+            if is_anomaly:
+                anomalies_found += 1
+            
+            # Determine severity
+            if anomaly_score >= 80:
+                severity = 'critical'
+            elif anomaly_score >= 60:
+                severity = 'high'
+            elif anomaly_score >= 40:
+                severity = 'medium'
+            else:
+                severity = 'low'
+            
+            results.append({
+                'worker_id': worker_id,
+                'is_anomaly': is_anomaly,
+                'anomaly_score': round(anomaly_score, 2),
+                'severity': severity,
+                'anomaly_types': rule_anomalies
+            })
+        
+        return jsonify({
+            'success': True,
+            'total_scanned': len(workers),
+            'anomalies_found': anomalies_found,
+            'results': results,
+            'detection_method': 'ml_and_rules' if anomaly_detector.is_loaded else 'rules_only'
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+# ============================================================================
 # MAIN
 # ============================================================================
 
 if __name__ == '__main__':
     port = int(os.environ.get('AI_MODEL_PORT', 5001))
-    print(f"\n🚀 TRACIENT APL/BPL Classification API")
+    print(f"\n🚀 TRACIENT Unified AI API")
     print(f"   Running on http://localhost:{port}")
-    print(f"   Model loaded: {predictor.is_loaded}\n")
+    print(f"   ├── BPL/APL Classification: {'✅ Ready' if predictor.is_loaded else '❌ Not loaded'}")
+    print(f"   └── Anomaly Detection: {'✅ ML Ready' if anomaly_detector.is_loaded else '⚠️ Rule-based only'}")
+    print(f"\n   Endpoints:")
+    print(f"   ├── GET  /health             - Health check")
+    print(f"   ├── POST /classify           - Classify household")
+    print(f"   ├── POST /batch-classify     - Batch classification")
+    print(f"   ├── POST /detect-anomaly     - Detect anomalies (single)")
+    print(f"   └── POST /batch-detect-anomaly - Batch anomaly detection\n")
     
     app.run(host='0.0.0.0', port=port, debug=False)

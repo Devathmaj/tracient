@@ -139,40 +139,160 @@ const performSECCAnalysis = (data) => {
 };
 
 /**
- * Detect anomalies in transaction data
+ * Detect anomalies in transaction data using AI API
+ * @param {Object} transactionData - Worker transaction/income data
+ * @returns {Object} Anomaly detection result
  */
 export const detectAnomaly = async (transactionData) => {
   try {
-    // Use rule-based detection as fallback if AI model not available
-    const ruleBasedResult = ruleBasedAnomalyDetection(transactionData);
+    logger.info('Calling Anomaly Detection API...');
     
-    // Try Python AI model
-    const aiResult = await runPythonModel('detect_anomaly', transactionData);
+    // Prepare data for AI API
+    const requestBody = {
+      worker_data: transactionData.worker_data || {
+        sector: transactionData.sector || 'other',
+        is_formal: transactionData.is_formal || 0,
+        income_tier: transactionData.income_tier || 'low',
+        account_age_months: transactionData.account_age_months || 12
+      },
+      pattern_data: transactionData.pattern_data || {
+        avg_tx_per_month: transactionData.avg_tx_per_month || transactionData.transactionCount || 5,
+        weekend_pct: transactionData.weekend_pct || 0.1,
+        night_hours_pct: transactionData.night_hours_pct || 0.05,
+        round_amount_pct: transactionData.round_amount_pct || 0.15,
+        near_50k_pct: transactionData.near_50k_pct || 0.05,
+        num_unique_sources: transactionData.num_unique_sources || 1,
+        source_concentration: transactionData.source_concentration || 0.9,
+        unverified_rate: transactionData.unverified_rate || 0.1,
+        velocity_change: transactionData.velocity_change || 1.0,
+        burst_ratio: transactionData.burst_ratio || 1.0,
+        cash_deposit_rate: transactionData.cash_deposit_rate || 0.1
+      },
+      income_data: transactionData.income_data || {
+        income_cv: transactionData.income_cv || 0.2,
+        max_mom_increase: transactionData.max_mom_increase || 0.3,
+        max_deviation_from_mean: transactionData.max_deviation_from_mean || 0.5,
+        monthly_incomes: transactionData.monthly_incomes || []
+      }
+    };
     
-    if (aiResult.success) {
+    // Calculate income_cv from historicalAvg if available
+    if (transactionData.amount && transactionData.historicalAvg) {
+      const deviation = Math.abs(transactionData.amount - transactionData.historicalAvg);
+      requestBody.income_data.max_deviation_from_mean = deviation / transactionData.historicalAvg;
+      requestBody.income_data.max_mom_increase = transactionData.amount / transactionData.historicalAvg;
+    }
+    
+    // Try the AI API first
+    const response = await fetch(`${AI_API_URL}/detect-anomaly`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(requestBody)
+    });
+    
+    if (response.ok) {
+      const result = await response.json();
+      logger.info(`Anomaly detection result: ${result.is_anomaly ? 'ANOMALY DETECTED' : 'Normal'} (score: ${result.anomaly_score})`);
       return {
         success: true,
-        isAnomaly: aiResult.data.is_anomaly || ruleBasedResult.isAnomaly,
-        confidence: aiResult.data.confidence || ruleBasedResult.confidence,
-        anomalyType: aiResult.data.anomaly_type || ruleBasedResult.type,
+        isAnomaly: result.is_anomaly,
+        anomalyScore: result.anomaly_score,
+        confidence: result.confidence,
+        severity: result.severity,
+        anomalyTypes: result.anomaly_types,
+        anomalyDescriptions: result.anomaly_descriptions,
         details: {
-          aiModel: aiResult.data,
-          ruleBased: ruleBasedResult
+          mlResult: result.ml_result,
+          detectionMethod: result.detection_method
         }
       };
     }
     
-    // Fallback to rule-based only
+    // If API fails, fall back to rule-based detection
+    logger.warn('AI API unavailable, using rule-based anomaly detection');
+    const ruleBasedResult = ruleBasedAnomalyDetection(transactionData);
     return {
       success: true,
       isAnomaly: ruleBasedResult.isAnomaly,
       confidence: ruleBasedResult.confidence,
-      anomalyType: ruleBasedResult.type,
+      anomalyScore: ruleBasedResult.confidence,
+      severity: ruleBasedResult.isAnomaly ? 'medium' : 'low',
+      anomalyTypes: ruleBasedResult.type ? [ruleBasedResult.type] : [],
       details: { ruleBased: ruleBasedResult },
       note: 'AI model unavailable, using rule-based detection'
     };
+    
   } catch (error) {
-    logger.error('Anomaly detection failed:', error.message);
+    logger.warn('AI API error, falling back to rule-based detection:', error.message);
+    const ruleBasedResult = ruleBasedAnomalyDetection(transactionData);
+    return {
+      success: true,
+      isAnomaly: ruleBasedResult.isAnomaly,
+      confidence: ruleBasedResult.confidence,
+      anomalyScore: ruleBasedResult.confidence,
+      severity: ruleBasedResult.isAnomaly ? 'medium' : 'low',
+      anomalyTypes: ruleBasedResult.type ? [ruleBasedResult.type] : [],
+      details: { ruleBased: ruleBasedResult },
+      note: 'AI model unavailable, using rule-based detection'
+    };
+  }
+};
+
+/**
+ * Batch detect anomalies for multiple workers
+ * @param {Array} workers - Array of worker data objects
+ * @returns {Object} Batch anomaly detection results
+ */
+export const batchDetectAnomalies = async (workers) => {
+  try {
+    logger.info(`Calling Batch Anomaly Detection API for ${workers.length} workers...`);
+    
+    const response = await fetch(`${AI_API_URL}/batch-detect-anomaly`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ workers })
+    });
+    
+    if (response.ok) {
+      const result = await response.json();
+      logger.info(`Batch anomaly scan complete: ${result.anomalies_found}/${result.total_scanned} anomalies found`);
+      return {
+        success: true,
+        totalScanned: result.total_scanned,
+        anomaliesFound: result.anomalies_found,
+        results: result.results,
+        detectionMethod: result.detection_method
+      };
+    }
+    
+    // Fallback: Process individually with rule-based
+    logger.warn('Batch API unavailable, processing individually');
+    const results = workers.map(worker => {
+      const ruleResult = ruleBasedAnomalyDetection(worker);
+      return {
+        worker_id: worker.worker_id || 'unknown',
+        is_anomaly: ruleResult.isAnomaly,
+        anomaly_score: ruleResult.confidence,
+        severity: ruleResult.isAnomaly ? 'medium' : 'low',
+        anomaly_types: ruleResult.type ? [ruleResult.type] : []
+      };
+    });
+    
+    return {
+      success: true,
+      totalScanned: workers.length,
+      anomaliesFound: results.filter(r => r.is_anomaly).length,
+      results,
+      detectionMethod: 'rules_only',
+      note: 'API unavailable, used rule-based detection'
+    };
+    
+  } catch (error) {
+    logger.error('Batch anomaly detection failed:', error.message);
     return { success: false, error: error.message };
   }
 };

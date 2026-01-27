@@ -423,6 +423,216 @@ export const generateReport = async (req, res) => {
   }
 };
 
+/**
+ * Run anomaly detection scan on workers
+ * Triggers AI-based anomaly detection for specified workers or all workers
+ */
+export const runAnomalyScan = async (req, res) => {
+  try {
+    const { workerIds, startDate, endDate, limit = 100 } = req.body;
+    
+    // Build query for workers to scan
+    const workerQuery = { isActive: true };
+    if (workerIds && workerIds.length > 0) {
+      workerQuery._id = { $in: workerIds };
+    }
+    
+    // Get workers to scan
+    const workers = await Worker.find(workerQuery)
+      .limit(limit)
+      .select('_id name sector annualIncome primaryEmployer createdAt')
+      .lean();
+    
+    if (workers.length === 0) {
+      return successResponse(res, {
+        message: 'No workers found to scan',
+        totalScanned: 0,
+        anomaliesFound: 0,
+        newAlerts: []
+      });
+    }
+    
+    // Build date filter for wage records
+    const wageQuery = { status: 'completed' };
+    if (startDate || endDate) {
+      wageQuery.createdAt = {};
+      if (startDate) wageQuery.createdAt.$gte = new Date(startDate);
+      if (endDate) wageQuery.createdAt.$lte = new Date(endDate);
+    }
+    
+    // Prepare worker data for batch anomaly detection
+    const workersData = [];
+    
+    for (const worker of workers) {
+      // Get worker's wage records for pattern analysis
+      const wageRecords = await WageRecord.find({
+        worker: worker._id,
+        ...wageQuery
+      })
+        .sort({ createdAt: -1 })
+        .limit(24)
+        .select('amount createdAt paymentMode verificationStatus employer')
+        .lean();
+      
+      if (wageRecords.length < 2) continue; // Need at least 2 records for pattern analysis
+      
+      // Calculate pattern features
+      const amounts = wageRecords.map(w => w.amount);
+      const mean = amounts.reduce((a, b) => a + b, 0) / amounts.length;
+      const variance = amounts.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / amounts.length;
+      const std = Math.sqrt(variance);
+      const cv = mean > 0 ? std / mean : 0;
+      
+      // Month-over-month changes
+      const momChanges = [];
+      for (let i = 1; i < amounts.length; i++) {
+        if (amounts[i] > 0) {
+          momChanges.push((amounts[i - 1] - amounts[i]) / amounts[i]);
+        }
+      }
+      const maxMomIncrease = momChanges.length > 0 ? Math.max(...momChanges) : 0;
+      const maxDeviation = mean > 0 ? Math.max(...amounts.map(a => Math.abs(a - mean) / mean)) : 0;
+      
+      // Calculate timing patterns
+      const weekendCount = wageRecords.filter(w => {
+        const day = new Date(w.createdAt).getDay();
+        return day === 0 || day === 6;
+      }).length;
+      const weekendPct = wageRecords.length > 0 ? weekendCount / wageRecords.length : 0;
+      
+      // Verification patterns
+      const unverifiedCount = wageRecords.filter(w => 
+        w.verificationStatus !== 'blockchain_verified' && w.verificationStatus !== 'verified'
+      ).length;
+      const unverifiedRate = wageRecords.length > 0 ? unverifiedCount / wageRecords.length : 0;
+      
+      // Unique employers (sources)
+      const uniqueEmployers = new Set(wageRecords.map(w => w.employer?.toString())).size;
+      
+      // Calculate round amount percentage
+      const roundAmounts = wageRecords.filter(w => w.amount % 1000 === 0 || w.amount % 5000 === 0).length;
+      const roundAmountPct = wageRecords.length > 0 ? roundAmounts / wageRecords.length : 0;
+      
+      // Calculate cash deposit rate
+      const cashDeposits = wageRecords.filter(w => w.paymentMode === 'cash_deposit').length;
+      const cashDepositRate = wageRecords.length > 0 ? cashDeposits / wageRecords.length : 0;
+      
+      workersData.push({
+        worker_id: worker._id.toString(),
+        worker_data: {
+          sector: worker.sector || 'other',
+          is_formal: worker.sector === 'govt_employee' || worker.sector === 'it_services' ? 1 : 0,
+          income_tier: worker.annualIncome > 500000 ? 'high' : worker.annualIncome > 100000 ? 'medium' : 'low',
+          account_age_months: Math.floor((Date.now() - new Date(worker.createdAt).getTime()) / (30 * 24 * 60 * 60 * 1000))
+        },
+        pattern_data: {
+          avg_tx_per_month: wageRecords.length,
+          weekend_pct: weekendPct,
+          night_hours_pct: 0.05, // Default - would need timestamp analysis
+          round_amount_pct: roundAmountPct,
+          near_50k_pct: wageRecords.filter(w => w.amount >= 45000 && w.amount < 50000).length / wageRecords.length,
+          num_unique_sources: uniqueEmployers,
+          source_concentration: uniqueEmployers > 0 ? 1 / uniqueEmployers : 1,
+          unverified_rate: unverifiedRate,
+          velocity_change: 1.0,
+          burst_ratio: wageRecords.length > 0 ? Math.max(...amounts) / mean : 1,
+          cash_deposit_rate: cashDepositRate
+        },
+        income_data: {
+          income_cv: cv,
+          max_mom_increase: maxMomIncrease,
+          max_deviation_from_mean: maxDeviation,
+          monthly_incomes: amounts
+        }
+      });
+    }
+    
+    if (workersData.length === 0) {
+      return successResponse(res, {
+        message: 'No workers with sufficient wage data to scan',
+        totalScanned: 0,
+        anomaliesFound: 0,
+        newAlerts: []
+      });
+    }
+    
+    // Import AI service and run batch detection
+    const { batchDetectAnomalies } = await import('../services/ai.service.js');
+    const scanResult = await batchDetectAnomalies(workersData);
+    
+    if (!scanResult.success) {
+      return errorResponse(res, scanResult.error || 'Anomaly scan failed', 500);
+    }
+    
+    // Create anomaly alerts for detected anomalies
+    const newAlerts = [];
+    for (const result of scanResult.results) {
+      if (result.is_anomaly) {
+        // Check if alert already exists for this worker
+        const existingAlert = await AnomalyAlert.findOne({
+          entityId: result.worker_id,
+          entityType: 'worker',
+          status: { $in: ['pending', 'investigating'] }
+        });
+        
+        if (!existingAlert) {
+          const alert = await AnomalyAlert.create({
+            alertType: result.anomaly_types?.[0] || 'unusual_pattern',
+            severity: result.severity || 'medium',
+            entityType: 'worker',
+            entityId: result.worker_id,
+            detectionMethod: scanResult.detectionMethod === 'ml_and_rules' ? 'ai_model' : 'rule_based',
+            confidence: result.anomaly_score || 50,
+            status: 'pending',
+            description: `AI anomaly scan detected suspicious patterns: ${result.anomaly_types?.join(', ') || 'unknown'}`,
+            metadata: {
+              anomalyScore: result.anomaly_score,
+              anomalyTypes: result.anomaly_types,
+              scanDate: new Date()
+            }
+          });
+          newAlerts.push(alert);
+        }
+      }
+    }
+    
+    // Log the scan
+    await AuditLog.create({
+      userId: req.user._id,
+      action: 'anomaly_scan',
+      entityType: 'system',
+      entityId: null,
+      details: {
+        totalScanned: scanResult.totalScanned,
+        anomaliesFound: scanResult.anomaliesFound,
+        newAlertsCreated: newAlerts.length,
+        detectionMethod: scanResult.detectionMethod
+      }
+    });
+    
+    logger.info(`Anomaly scan completed: ${scanResult.totalScanned} scanned, ${scanResult.anomaliesFound} anomalies, ${newAlerts.length} new alerts`);
+    
+    return successResponse(res, {
+      message: 'Anomaly scan completed successfully',
+      totalScanned: scanResult.totalScanned,
+      anomaliesFound: scanResult.anomaliesFound,
+      newAlertsCreated: newAlerts.length,
+      detectionMethod: scanResult.detectionMethod,
+      newAlerts: newAlerts.map(a => ({
+        id: a._id,
+        alertType: a.alertType,
+        severity: a.severity,
+        entityId: a.entityId,
+        confidence: a.confidence
+      }))
+    });
+    
+  } catch (error) {
+    logger.error('Run anomaly scan error:', error);
+    return errorResponse(res, error.message, 500);
+  }
+};
+
 export default {
   getDashboardStats,
   getPendingVerifications,
@@ -432,5 +642,6 @@ export default {
   resolveAnomaly,
   getWelfareSchemes,
   checkSchemeEligibility,
-  generateReport
+  generateReport,
+  runAnomalyScan
 };

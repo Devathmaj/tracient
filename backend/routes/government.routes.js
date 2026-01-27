@@ -192,6 +192,25 @@ router.post(
   govController.generateReport
 );
 
+/**
+ * @route POST /api/government/run-anomaly-scan
+ * @desc Run anomaly detection scan on workers
+ * @access Private (Government, Admin)
+ */
+router.post(
+  '/run-anomaly-scan',
+  authenticate,
+  govOrAdmin,
+  [
+    body('workerIds').optional().isArray().withMessage('Worker IDs must be an array'),
+    body('startDate').optional().isISO8601().withMessage('Start date must be valid ISO date'),
+    body('endDate').optional().isISO8601().withMessage('End date must be valid ISO date'),
+    body('limit').optional().isInt({ min: 1, max: 1000 }).withMessage('Limit must be between 1 and 1000')
+  ],
+  validate,
+  govController.runAnomalyScan
+);
+
 // TODO: Implement getPolicyConfig and updatePolicyConfig controllers
 // router.get(
 //   '/policy-config',
