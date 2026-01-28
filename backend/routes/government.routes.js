@@ -211,24 +211,152 @@ router.post(
   govController.runAnomalyScan
 );
 
-// TODO: Implement getPolicyConfig and updatePolicyConfig controllers
-// router.get(
-//   '/policy-config',
-//   authenticate,
-//   govOrAdmin,
-//   govController.getPolicyConfig
-// );
+// ============================================================================
+// CLASSIFICATION POLICY MANAGEMENT ROUTES
+// ============================================================================
 
-// router.put(
-//   '/policy-config/:key',
-//   authenticate,
-//   adminOnly,
-//   [
-//     body('value').notEmpty().withMessage('Value is required'),
-//     body('reason').optional().isString()
-//   ],
-//   validate,
-//   govController.updatePolicyConfig
-// );
+/**
+ * @route GET /api/government/classification-policies
+ * @desc Get all classification override policies
+ * @access Private (Government, Admin)
+ */
+router.get(
+  '/classification-policies',
+  authenticate,
+  govOrAdmin,
+  [
+    query('isActive').optional().isBoolean().withMessage('isActive must be a boolean'),
+    query('policyType').optional().isIn(['exclusion_override', 'inclusion_override', 'threshold_override'])
+      .withMessage('Invalid policy type')
+  ],
+  validate,
+  govController.getClassificationPolicies
+);
+
+/**
+ * @route GET /api/government/classification-policies/fields
+ * @desc Get available fields for creating policy rules
+ * @access Private (Government, Admin)
+ */
+router.get(
+  '/classification-policies/fields',
+  authenticate,
+  govOrAdmin,
+  govController.getPolicyRuleFields
+);
+
+/**
+ * @route GET /api/government/classification-policies/status
+ * @desc Get policy application status (modified, last applied, etc.)
+ * @access Private (Government, Admin)
+ */
+router.get(
+  '/classification-policies/status',
+  authenticate,
+  govOrAdmin,
+  govController.getPolicyApplicationStatus
+);
+
+/**
+ * @route POST /api/government/classification-policies/apply
+ * @desc Apply all active policies to existing families (bulk re-screening)
+ * @access Private (Government, Admin)
+ */
+router.post(
+  '/classification-policies/apply',
+  authenticate,
+  govOrAdmin,
+  govController.applyClassificationPolicies
+);
+
+/**
+ * @route GET /api/government/classification-policies/:policyId
+ * @desc Get a single classification policy
+ * @access Private (Government, Admin)
+ */
+router.get(
+  '/classification-policies/:policyId',
+  authenticate,
+  govOrAdmin,
+  govController.getClassificationPolicy
+);
+
+/**
+ * @route POST /api/government/classification-policies
+ * @desc Create a new classification override policy
+ * @access Private (Government, Admin)
+ */
+router.post(
+  '/classification-policies',
+  authenticate,
+  govOrAdmin,
+  [
+    body('policyId').notEmpty().trim().withMessage('Policy ID is required'),
+    body('name').notEmpty().trim().withMessage('Policy name is required'),
+    body('description').optional().isString().trim(),
+    body('policyType').isIn(['exclusion_override', 'inclusion_override', 'threshold_override'])
+      .withMessage('Valid policy type is required'),
+    body('rules').isArray({ min: 1 }).withMessage('At least one rule is required'),
+    body('rules.*.field').notEmpty().withMessage('Rule field is required'),
+    body('rules.*.operator').isIn([
+      'equals', 'not_equals', 'greater_than', 'less_than',
+      'greater_than_or_equal', 'less_than_or_equal',
+      'contains', 'not_contains', 'is_true', 'is_false'
+    ]).withMessage('Valid operator is required'),
+    body('ruleLogic').optional().isIn(['AND', 'OR']).withMessage('Rule logic must be AND or OR'),
+    body('action').isIn(['reclassify_to_bpl', 'reclassify_to_apl', 'flag_for_review', 'ignore_criterion'])
+      .withMessage('Valid action is required'),
+    body('targetCriteria').optional().isArray(),
+    body('priority').optional().isInt().withMessage('Priority must be an integer'),
+    body('effectiveFrom').optional().isISO8601().withMessage('Effective from must be a valid date'),
+    body('effectiveUntil').optional().isISO8601().withMessage('Effective until must be a valid date')
+  ],
+  validate,
+  govController.createClassificationPolicy
+);
+
+/**
+ * @route PUT /api/government/classification-policies/:policyId
+ * @desc Update an existing classification policy
+ * @access Private (Government, Admin)
+ */
+router.put(
+  '/classification-policies/:policyId',
+  authenticate,
+  govOrAdmin,
+  [
+    body('name').optional().trim(),
+    body('description').optional().trim(),
+    body('policyType').optional().isIn(['exclusion_override', 'inclusion_override', 'threshold_override']),
+    body('rules').optional().isArray({ min: 1 }),
+    body('ruleLogic').optional().isIn(['AND', 'OR']),
+    body('action').optional().isIn(['reclassify_to_bpl', 'reclassify_to_apl', 'flag_for_review', 'ignore_criterion']),
+    body('targetCriteria').optional().isArray(),
+    body('priority').optional().isInt(),
+    body('isActive').optional().isBoolean(),
+    body('effectiveFrom').optional().isISO8601(),
+    body('effectiveUntil').optional().isISO8601(),
+    body('reason').optional().isString().trim()
+  ],
+  validate,
+  govController.updateClassificationPolicy
+);
+
+/**
+ * @route DELETE /api/government/classification-policies/:policyId
+ * @desc Delete (deactivate) a classification policy
+ * @access Private (Government, Admin)
+ */
+router.delete(
+  '/classification-policies/:policyId',
+  authenticate,
+  govOrAdmin,
+  [
+    body('reason').optional().isString().trim(),
+    body('hardDelete').optional().isBoolean()
+  ],
+  validate,
+  govController.deleteClassificationPolicy
+);
 
 export default router;

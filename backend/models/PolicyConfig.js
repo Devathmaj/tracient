@@ -1,5 +1,163 @@
 import mongoose from 'mongoose';
 
+/**
+ * Classification Rule Schema - defines a single rule for APL/BPL classification override
+ */
+const classificationRuleSchema = new mongoose.Schema({
+  field: {
+    type: String,
+    required: true
+  },
+  operator: {
+    type: String,
+    enum: ['equals', 'not_equals', 'greater_than', 'less_than', 'greater_than_or_equal', 'less_than_or_equal', 'contains', 'not_contains', 'is_true', 'is_false'],
+    required: true
+  },
+  value: {
+    type: mongoose.Schema.Types.Mixed,
+    required: function() {
+      return !['is_true', 'is_false'].includes(this.operator);
+    }
+  }
+}, { _id: false });
+
+/**
+ * Classification Override Policy Schema - for policies that modify AI classification results
+ */
+const classificationOverrideSchema = new mongoose.Schema({
+  // Policy identification
+  policyId: {
+    type: String,
+    required: true,
+    unique: true
+  },
+  name: {
+    type: String,
+    required: true
+  },
+  description: String,
+  
+  // Policy type
+  policyType: {
+    type: String,
+    enum: ['exclusion_override', 'inclusion_override', 'threshold_override'],
+    required: true
+  },
+  
+  // Rules - conditions that must be met for this policy to apply
+  rules: [classificationRuleSchema],
+  
+  // Rule combination logic
+  ruleLogic: {
+    type: String,
+    enum: ['AND', 'OR'],
+    default: 'AND'
+  },
+  
+  // Action to take when rules match
+  action: {
+    type: String,
+    enum: ['reclassify_to_bpl', 'reclassify_to_apl', 'flag_for_review', 'ignore_criterion'],
+    required: true
+  },
+  
+  // Which AI classification reasons this policy targets (for ignore_criterion)
+  targetCriteria: [{
+    type: String
+  }],
+  
+  // Priority (higher = applied first)
+  priority: {
+    type: Number,
+    default: 0
+  },
+  
+  // Status
+  isActive: {
+    type: Boolean,
+    default: true
+  },
+  
+  // Effective dates
+  effectiveFrom: {
+    type: Date,
+    default: Date.now
+  },
+  effectiveUntil: {
+    type: Date,
+    default: null
+  },
+  
+  // Audit
+  createdBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'GovOfficial'
+  },
+  lastModifiedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'GovOfficial'
+  },
+  modificationHistory: [{
+    action: String, // 'created', 'updated', 'activated', 'deactivated'
+    modifiedBy: mongoose.Schema.Types.ObjectId,
+    modifiedAt: Date,
+    reason: String,
+    previousState: mongoose.Schema.Types.Mixed
+  }]
+}, {
+  timestamps: true
+});
+
+// Index for efficient policy lookups
+classificationOverrideSchema.index({ isActive: 1, priority: -1 });
+classificationOverrideSchema.index({ policyType: 1, isActive: 1 });
+
+// Static method to get active policies sorted by priority
+classificationOverrideSchema.statics.getActivePolicies = function() {
+  const now = new Date();
+  return this.find({
+    isActive: true,
+    effectiveFrom: { $lte: now },
+    $or: [
+      { effectiveUntil: null },
+      { effectiveUntil: { $gte: now } }
+    ]
+  }).sort({ priority: -1 });
+};
+
+export const ClassificationOverride = mongoose.model('ClassificationOverride', classificationOverrideSchema);
+
+/**
+ * System Metadata Schema - for tracking policy application state
+ */
+const systemMetadataSchema = new mongoose.Schema({
+  key: {
+    type: String,
+    required: true,
+    unique: true
+  },
+  value: mongoose.Schema.Types.Mixed,
+  updatedAt: {
+    type: Date,
+    default: Date.now
+  }
+});
+
+systemMetadataSchema.statics.get = async function(key) {
+  const doc = await this.findOne({ key });
+  return doc ? doc.value : null;
+};
+
+systemMetadataSchema.statics.set = async function(key, value) {
+  return this.findOneAndUpdate(
+    { key },
+    { key, value, updatedAt: new Date() },
+    { upsert: true, new: true }
+  );
+};
+
+export const SystemMetadata = mongoose.model('SystemMetadata', systemMetadataSchema);
+
 const policyConfigSchema = new mongoose.Schema({
   // Key
   key: {
@@ -28,7 +186,7 @@ const policyConfigSchema = new mongoose.Schema({
   description: String,
   category: {
     type: String,
-    enum: ['bpl', 'welfare', 'payment', 'security', 'notification', 'system', 'other'],
+    enum: ['bpl', 'welfare', 'payment', 'security', 'notification', 'system', 'classification', 'other'],
     default: 'other'
   },
   

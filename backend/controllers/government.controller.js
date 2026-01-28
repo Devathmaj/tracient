@@ -1,7 +1,7 @@
 /**
  * Government Controller
  */
-import { Worker, Employer, WageRecord, AnomalyAlert, WelfareScheme, AuditLog } from '../models/index.js';
+import { Worker, Employer, WageRecord, AnomalyAlert, WelfareScheme, AuditLog, ClassificationOverride, PolicyConfig, SystemMetadata } from '../models/index.js';
 import { successResponse, errorResponse, notFoundResponse, paginatedResponse } from '../utils/response.util.js';
 import { paginateQuery, paginateAggregate } from '../utils/pagination.util.js';
 import { calculateBPLStatus } from '../utils/bpl.util.js';
@@ -9,6 +9,7 @@ import { sendVerificationEmail, sendSchemeNotification } from '../services/email
 import { recordVerification } from '../services/fabric.service.js';
 import { logger } from '../utils/logger.util.js';
 import { VERIFICATION_STATUS, INCOME_CATEGORIES } from '../config/constants.js';
+import * as policyScreeningService from '../services/policyScreening.service.js';
 
 /**
  * Get dashboard statistics
@@ -466,12 +467,12 @@ export const runAnomalyScan = async (req, res) => {
     for (const worker of workers) {
       // Get worker's wage records for pattern analysis
       const wageRecords = await WageRecord.find({
-        worker: worker._id,
+        workerId: worker._id,
         ...wageQuery
       })
         .sort({ createdAt: -1 })
         .limit(24)
-        .select('amount createdAt paymentMode verificationStatus employer')
+        .select('amount createdAt paymentMode verificationStatus employer isVerified')
         .lean();
       
       if (wageRecords.length < 2) continue; // Need at least 2 records for pattern analysis
@@ -500,9 +501,9 @@ export const runAnomalyScan = async (req, res) => {
       }).length;
       const weekendPct = wageRecords.length > 0 ? weekendCount / wageRecords.length : 0;
       
-      // Verification patterns
+      // Verification patterns - check both isVerified and verificationStatus
       const unverifiedCount = wageRecords.filter(w => 
-        w.verificationStatus !== 'blockchain_verified' && w.verificationStatus !== 'verified'
+        !w.isVerified && w.verificationStatus !== 'blockchain_verified' && w.verificationStatus !== 'verified'
       ).length;
       const unverifiedRate = wageRecords.length > 0 ? unverifiedCount / wageRecords.length : 0;
       
@@ -581,9 +582,11 @@ export const runAnomalyScan = async (req, res) => {
             severity: result.severity || 'medium',
             entityType: 'worker',
             entityId: result.worker_id,
+            workerId: result.worker_id,
             detectionMethod: scanResult.detectionMethod === 'ml_and_rules' ? 'ai_model' : 'rule_based',
             confidence: result.anomaly_score || 50,
             status: 'pending',
+            title: `Anomaly Detected: ${result.anomaly_types?.[0] || 'unusual_pattern'}`,
             description: `AI anomaly scan detected suspicious patterns: ${result.anomaly_types?.join(', ') || 'unknown'}`,
             metadata: {
               anomalyScore: result.anomaly_score,
@@ -600,14 +603,16 @@ export const runAnomalyScan = async (req, res) => {
     await AuditLog.create({
       userId: req.user._id,
       action: 'anomaly_scan',
-      entityType: 'system',
-      entityId: null,
-      details: {
+      category: 'system',
+      resourceType: 'anomaly_scan',
+      description: `Anomaly scan completed: ${scanResult.totalScanned} workers scanned, ${scanResult.anomaliesFound} anomalies found`,
+      metadata: {
         totalScanned: scanResult.totalScanned,
         anomaliesFound: scanResult.anomaliesFound,
         newAlertsCreated: newAlerts.length,
         detectionMethod: scanResult.detectionMethod
-      }
+      },
+      success: true
     });
     
     logger.info(`Anomaly scan completed: ${scanResult.totalScanned} scanned, ${scanResult.anomaliesFound} anomalies, ${newAlerts.length} new alerts`);
@@ -633,6 +638,464 @@ export const runAnomalyScan = async (req, res) => {
   }
 };
 
+// ============================================================================
+// CLASSIFICATION POLICY MANAGEMENT
+// ============================================================================
+
+/**
+ * Get all classification override policies
+ */
+export const getClassificationPolicies = async (req, res) => {
+  try {
+    const { isActive, policyType } = req.query;
+    
+    const query = {};
+    if (isActive !== undefined) {
+      query.isActive = isActive === 'true';
+    }
+    if (policyType) {
+      query.policyType = policyType;
+    }
+    
+    const policies = await ClassificationOverride.find(query)
+      .sort({ priority: -1, createdAt: -1 })
+      .populate('createdBy', 'name designation')
+      .populate('lastModifiedBy', 'name designation');
+    
+    // Get policy application status
+    const applicationStatus = await policyScreeningService.getPolicyApplicationStatus();
+    
+    return successResponse(res, {
+      policies,
+      applicationStatus
+    });
+    
+  } catch (error) {
+    logger.error('Get classification policies error:', error);
+    return errorResponse(res, error.message, 500);
+  }
+};
+
+/**
+ * Get a single classification policy by ID
+ */
+export const getClassificationPolicy = async (req, res) => {
+  try {
+    const { policyId } = req.params;
+    
+    const policy = await ClassificationOverride.findOne({ policyId })
+      .populate('createdBy', 'name designation')
+      .populate('lastModifiedBy', 'name designation');
+    
+    if (!policy) {
+      return notFoundResponse(res, 'Policy not found');
+    }
+    
+    return successResponse(res, policy);
+    
+  } catch (error) {
+    logger.error('Get classification policy error:', error);
+    return errorResponse(res, error.message, 500);
+  }
+};
+
+/**
+ * Create a new classification override policy
+ */
+export const createClassificationPolicy = async (req, res) => {
+  try {
+    const {
+      policyId,
+      name,
+      description,
+      policyType,
+      rules,
+      ruleLogic,
+      action,
+      targetCriteria,
+      priority,
+      effectiveFrom,
+      effectiveUntil
+    } = req.body;
+    
+    // Check if policyId already exists
+    const existing = await ClassificationOverride.findOne({ policyId });
+    if (existing) {
+      return errorResponse(res, 'Policy ID already exists', 400);
+    }
+    
+    const policy = new ClassificationOverride({
+      policyId,
+      name,
+      description,
+      policyType,
+      rules,
+      ruleLogic: ruleLogic || 'AND',
+      action,
+      targetCriteria,
+      priority: priority || 0,
+      isActive: true,
+      effectiveFrom: effectiveFrom || new Date(),
+      effectiveUntil,
+      createdBy: req.user._id,
+      lastModifiedBy: req.user._id,
+      modificationHistory: [{
+        action: 'created',
+        modifiedBy: req.user._id,
+        modifiedAt: new Date(),
+        reason: 'Policy created'
+      }]
+    });
+    
+    await policy.save();
+    
+    // Mark that policies have been modified
+    await policyScreeningService.markPoliciesModified();
+    
+    // Log the action
+    await AuditLog.create({
+      userId: req.user._id,
+      action: 'policy_created',
+      category: 'policy',
+      resourceType: 'classification_policy',
+      resourceId: policy._id,
+      resourceName: policy.name,
+      description: `Created classification policy: ${policy.name}`,
+      metadata: {
+        policyId: policy.policyId,
+        name: policy.name,
+        policyType: policy.policyType,
+        action: policy.action
+      },
+      success: true
+    });
+    
+    logger.info(`Classification policy created: ${policyId} by user ${req.user._id}`);
+    
+    return successResponse(res, policy, 'Policy created successfully', 201);
+    
+  } catch (error) {
+    logger.error('Create classification policy error:', error);
+    return errorResponse(res, error.message, 500);
+  }
+};
+
+/**
+ * Update an existing classification override policy
+ */
+export const updateClassificationPolicy = async (req, res) => {
+  try {
+    const { policyId } = req.params;
+    const updates = req.body;
+    const { reason } = updates;
+    
+    const policy = await ClassificationOverride.findOne({ policyId });
+    
+    if (!policy) {
+      return notFoundResponse(res, 'Policy not found');
+    }
+    
+    // Store previous state for history
+    const previousState = policy.toObject();
+    delete previousState.modificationHistory;
+    
+    // Update allowed fields
+    const allowedFields = [
+      'name', 'description', 'rules', 'ruleLogic', 'action',
+      'targetCriteria', 'priority', 'isActive', 'effectiveFrom', 'effectiveUntil'
+    ];
+    
+    allowedFields.forEach(field => {
+      if (updates[field] !== undefined) {
+        policy[field] = updates[field];
+      }
+    });
+    
+    policy.lastModifiedBy = req.user._id;
+    policy.modificationHistory.push({
+      action: 'updated',
+      modifiedBy: req.user._id,
+      modifiedAt: new Date(),
+      reason: reason || 'Policy updated',
+      previousState
+    });
+    
+    await policy.save();
+    
+    // Mark that policies have been modified
+    await policyScreeningService.markPoliciesModified();
+    
+    // Log the action
+    await AuditLog.create({
+      userId: req.user._id,
+      action: 'policy_updated',
+      entityType: 'classification_policy',
+      entityId: policy._id,
+      details: {
+        policyId: policy.policyId,
+        updatedFields: Object.keys(updates).filter(k => k !== 'reason')
+      }
+    });
+    
+    logger.info(`Classification policy updated: ${policyId} by user ${req.user._id}`);
+    
+    return successResponse(res, policy, 'Policy updated successfully');
+    
+  } catch (error) {
+    logger.error('Update classification policy error:', error);
+    return errorResponse(res, error.message, 500);
+  }
+};
+
+/**
+ * Delete (deactivate) a classification override policy
+ */
+export const deleteClassificationPolicy = async (req, res) => {
+  try {
+    const { policyId } = req.params;
+    const { reason, hardDelete } = req.body;
+    
+    const policy = await ClassificationOverride.findOne({ policyId });
+    
+    if (!policy) {
+      return notFoundResponse(res, 'Policy not found');
+    }
+    
+    if (hardDelete === true) {
+      // Permanently delete the policy
+      await ClassificationOverride.deleteOne({ policyId });
+      
+      await AuditLog.create({
+        userId: req.user._id,
+        action: 'policy_deleted',
+        entityType: 'classification_policy',
+        entityId: policy._id,
+        details: {
+          policyId: policy.policyId,
+          name: policy.name,
+          reason
+        }
+      });
+      
+      logger.info(`Classification policy permanently deleted: ${policyId} by user ${req.user._id}`);
+      
+      return successResponse(res, null, 'Policy permanently deleted');
+    }
+    
+    // Soft delete - just deactivate
+    policy.isActive = false;
+    policy.lastModifiedBy = req.user._id;
+    policy.modificationHistory.push({
+      action: 'deactivated',
+      modifiedBy: req.user._id,
+      modifiedAt: new Date(),
+      reason: reason || 'Policy deactivated'
+    });
+    
+    await policy.save();
+    
+    // Mark that policies have been modified
+    await policyScreeningService.markPoliciesModified();
+    
+    await AuditLog.create({
+      userId: req.user._id,
+      action: 'policy_deactivated',
+      entityType: 'classification_policy',
+      entityId: policy._id,
+      details: {
+        policyId: policy.policyId,
+        reason
+      }
+    });
+    
+    logger.info(`Classification policy deactivated: ${policyId} by user ${req.user._id}`);
+    
+    return successResponse(res, policy, 'Policy deactivated successfully');
+    
+  } catch (error) {
+    logger.error('Delete classification policy error:', error);
+    return errorResponse(res, error.message, 500);
+  }
+};
+
+/**
+ * Apply all active policies to existing families (bulk re-screening)
+ */
+export const applyClassificationPolicies = async (req, res) => {
+  try {
+    logger.info(`Bulk policy application triggered by user ${req.user._id}`);
+    
+    const result = await policyScreeningService.bulkRescreen(req.user._id);
+    
+    // Log the action
+    await AuditLog.create({
+      userId: req.user._id,
+      action: 'policies_applied',
+      entityType: 'system',
+      entityId: null,
+      details: {
+        totalFamilies: result.totalFamilies,
+        reclassified: result.reclassified,
+        unchanged: result.unchanged,
+        errors: result.errors
+      }
+    });
+    
+    return successResponse(res, result, 'Policy application completed');
+    
+  } catch (error) {
+    logger.error('Apply classification policies error:', error);
+    return errorResponse(res, error.message, 500);
+  }
+};
+
+/**
+ * Get policy application status
+ */
+export const getPolicyApplicationStatus = async (req, res) => {
+  try {
+    const status = await policyScreeningService.getPolicyApplicationStatus();
+    return successResponse(res, status);
+  } catch (error) {
+    logger.error('Get policy application status error:', error);
+    return errorResponse(res, error.message, 500);
+  }
+};
+
+/**
+ * Get available fields for policy rules (from feature names)
+ */
+export const getPolicyRuleFields = async (req, res) => {
+  try {
+    // These are the fields that can be used in classification policies
+    // Based on Family model and feature_names.json
+    const fields = [
+      // Income Features
+      { field: 'highest_earner_monthly', label: 'Highest Earner Monthly Income', type: 'number', category: 'income' },
+      { field: 'annual_income', label: 'Annual Income', type: 'number', category: 'income' },
+      
+      // Family Demographics
+      { field: 'family_size', label: 'Family Size', type: 'number', category: 'demographics' },
+      { field: 'head_age', label: 'Head of Family Age', type: 'number', category: 'demographics' },
+      { field: 'children_0_6', label: 'Children (0-6 years)', type: 'number', category: 'demographics' },
+      { field: 'children_6_14', label: 'Children (6-14 years)', type: 'number', category: 'demographics' },
+      { field: 'adults_16_59', label: 'Adults (16-59 years)', type: 'number', category: 'demographics' },
+      { field: 'adult_males_16_59', label: 'Adult Males (16-59)', type: 'number', category: 'demographics' },
+      { field: 'adult_females_16_59', label: 'Adult Females (16-59)', type: 'number', category: 'demographics' },
+      { field: 'elderly_60_plus', label: 'Elderly (60+)', type: 'number', category: 'demographics' },
+      { field: 'working_members', label: 'Working Members', type: 'number', category: 'demographics' },
+      
+      // Land & Agriculture
+      { field: 'total_land_acres', label: 'Total Land (acres)', type: 'number', category: 'land' },
+      { field: 'irrigated_land_acres', label: 'Irrigated Land (acres)', type: 'number', category: 'land' },
+      
+      // Housing
+      { field: 'house_type', label: 'House Type', type: 'select', options: ['houseless', 'temporary_plastic', 'kucha', 'semi_pucca', 'pucca'], category: 'housing' },
+      { field: 'num_rooms', label: 'Number of Rooms', type: 'number', category: 'housing' },
+      
+      // Assets - Exclusion Criteria
+      { field: 'owns_two_wheeler', label: 'Owns Two Wheeler', type: 'boolean', category: 'assets' },
+      { field: 'owns_four_wheeler', label: 'Owns Four Wheeler (Car)', type: 'boolean', category: 'assets' },
+      { field: 'owns_tractor', label: 'Owns Tractor', type: 'boolean', category: 'assets' },
+      { field: 'owns_mechanized_equipment', label: 'Owns Mechanized Equipment', type: 'boolean', category: 'assets' },
+      { field: 'owns_refrigerator', label: 'Owns Refrigerator', type: 'boolean', category: 'assets' },
+      { field: 'owns_landline', label: 'Owns Landline Phone', type: 'boolean', category: 'assets' },
+      { field: 'owns_tv', label: 'Owns TV', type: 'boolean', category: 'assets' },
+      { field: 'owns_mobile', label: 'Owns Mobile Phone', type: 'boolean', category: 'assets' },
+      
+      // Amenities
+      { field: 'has_electricity', label: 'Has Electricity', type: 'boolean', category: 'amenities' },
+      { field: 'has_water_tap', label: 'Has Water Tap', type: 'boolean', category: 'amenities' },
+      { field: 'has_toilet', label: 'Has Toilet', type: 'boolean', category: 'amenities' },
+      
+      // Financial Status
+      { field: 'has_bank_account', label: 'Has Bank Account', type: 'boolean', category: 'financial' },
+      { field: 'has_savings', label: 'Has Savings', type: 'boolean', category: 'financial' },
+      { field: 'has_loan', label: 'Has Loan', type: 'boolean', category: 'financial' },
+      
+      // Special Categories
+      { field: 'is_female_headed', label: 'Female Headed Household', type: 'boolean', category: 'special' },
+      { field: 'is_pvtg', label: 'PVTG (Primitive Tribal Group)', type: 'boolean', category: 'special' },
+      { field: 'is_minority', label: 'Minority Community', type: 'boolean', category: 'special' },
+      { field: 'is_informal', label: 'Informal Sector Worker', type: 'boolean', category: 'special' },
+      { field: 'is_houseless', label: 'Houseless', type: 'boolean', category: 'special' },
+      
+      // Education
+      { field: 'education_code', label: 'Education Level', type: 'number', category: 'education' },
+      { field: 'literate_adults_above_25', label: 'Literate Adults (25+)', type: 'number', category: 'education' }
+    ];
+    
+    // Target criteria options (reasons the AI might classify someone)
+    const targetCriteriaOptions = [
+      // Exclusion criteria
+      'two-wheeler',
+      'four-wheeler',
+      'car',
+      'motor vehicle',
+      'tractor',
+      'mechanized',
+      'refrigerator',
+      'landline',
+      'pucca house',
+      '3+ rooms',
+      '2.5+ acres',
+      'land ownership',
+      'income tax',
+      'professional tax',
+      'government employee',
+      
+      // Inclusion criteria
+      'houseless',
+      'primitive tribal',
+      'pvtg',
+      'destitute',
+      'manual scavenger',
+      'bonded laborer',
+      
+      // Deprivation indicators
+      'kucha house',
+      'no adults 16-59',
+      'female-headed',
+      'no literate adult',
+      'landless',
+      'SC/ST',
+      'low income'
+    ];
+    
+    return successResponse(res, {
+      fields,
+      targetCriteriaOptions,
+      operators: [
+        { value: 'equals', label: 'Equals', applicableTo: ['number', 'string', 'select'] },
+        { value: 'not_equals', label: 'Not Equals', applicableTo: ['number', 'string', 'select'] },
+        { value: 'greater_than', label: 'Greater Than', applicableTo: ['number'] },
+        { value: 'less_than', label: 'Less Than', applicableTo: ['number'] },
+        { value: 'greater_than_or_equal', label: 'Greater Than or Equal', applicableTo: ['number'] },
+        { value: 'less_than_or_equal', label: 'Less Than or Equal', applicableTo: ['number'] },
+        { value: 'is_true', label: 'Is True', applicableTo: ['boolean'] },
+        { value: 'is_false', label: 'Is False', applicableTo: ['boolean'] },
+        { value: 'contains', label: 'Contains', applicableTo: ['string', 'array'] },
+        { value: 'not_contains', label: 'Does Not Contain', applicableTo: ['string', 'array'] }
+      ],
+      policyTypes: [
+        { value: 'exclusion_override', label: 'Override Exclusion Criteria', description: 'Ignore specific exclusion criteria (e.g., car ownership)' },
+        { value: 'inclusion_override', label: 'Override Inclusion Criteria', description: 'Add or modify inclusion criteria for BPL' },
+        { value: 'threshold_override', label: 'Threshold Override', description: 'Override income or other thresholds' }
+      ],
+      actions: [
+        { value: 'reclassify_to_bpl', label: 'Reclassify to BPL', description: 'Change classification from APL to BPL' },
+        { value: 'reclassify_to_apl', label: 'Reclassify to APL', description: 'Change classification from BPL to APL' },
+        { value: 'ignore_criterion', label: 'Ignore Classification Criterion', description: 'Ignore specific AI classification criteria' },
+        { value: 'flag_for_review', label: 'Flag for Manual Review', description: 'Mark for manual review without changing classification' }
+      ]
+    });
+    
+  } catch (error) {
+    logger.error('Get policy rule fields error:', error);
+    return errorResponse(res, error.message, 500);
+  }
+};
+
 export default {
   getDashboardStats,
   getPendingVerifications,
@@ -643,5 +1106,14 @@ export default {
   getWelfareSchemes,
   checkSchemeEligibility,
   generateReport,
-  runAnomalyScan
+  runAnomalyScan,
+  // Classification Policy Management
+  getClassificationPolicies,
+  getClassificationPolicy,
+  createClassificationPolicy,
+  updateClassificationPolicy,
+  deleteClassificationPolicy,
+  applyClassificationPolicies,
+  getPolicyApplicationStatus,
+  getPolicyRuleFields
 };

@@ -81,6 +81,8 @@ const BPLStatus: React.FC = () => {
   const [family, setFamily] = useState<Family | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [classificationMessage, setClassificationMessage] = useState<string | null>(null);
+  const [classificationError, setClassificationError] = useState<string | null>(null);
 
   useEffect(() => {
     fetchData();
@@ -91,7 +93,7 @@ const BPLStatus: React.FC = () => {
     try {
       const familyData = await familyService.getMyFamily();
       setFamily(familyData.family);
-      // Use mock data for now, but we have family data for classification
+      // Use mock data for income breakdown visualization, but real family classification
       setData(mockBPLData);
     } catch (error) {
       console.error('Error fetching family data:', error);
@@ -104,8 +106,34 @@ const BPLStatus: React.FC = () => {
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
-    await fetchData();
-    setIsRefreshing(false);
+    setClassificationMessage(null);
+    setClassificationError(null);
+    
+    try {
+      // Call the AI model to reclassify the family
+      const result = await familyService.reclassifyFamily();
+      
+      if (result.family) {
+        setFamily(result.family);
+        
+        // Show success message with classification details
+        const classification = result.family.classification;
+        const confidence = result.family.classification_confidence || 0;
+        const reason = result.family.classification_reason || '';
+        
+        setClassificationMessage(
+          `Classification updated: ${classification} (${confidence}% confidence). ${reason}`
+        );
+      }
+      
+      // Also refresh other data
+      await fetchData();
+    } catch (error: any) {
+      console.error('Error reclassifying family:', error);
+      setClassificationError(error.message || 'Failed to refresh classification. Please try again.');
+    } finally {
+      setIsRefreshing(false);
+    }
   };
 
   if (isLoading || !data) {
@@ -135,7 +163,7 @@ const BPLStatus: React.FC = () => {
         <div className="flex items-center gap-3">
           <Button variant="outline" onClick={handleRefresh} disabled={isRefreshing}>
             <RefreshCw className={`h-4 w-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
-            Refresh Status
+            {isRefreshing ? 'Classifying...' : 'Refresh Status'}
           </Button>
           {data.certificateId && (
             <Button>
@@ -145,6 +173,21 @@ const BPLStatus: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* Classification Success/Error Messages */}
+      {classificationMessage && (
+        <Alert variant="success" onClose={() => setClassificationMessage(null)}>
+          <CheckCircle className="h-4 w-4" />
+          <span>{classificationMessage}</span>
+        </Alert>
+      )}
+      
+      {classificationError && (
+        <Alert variant="error" onClose={() => setClassificationError(null)}>
+          <XCircle className="h-4 w-4" />
+          <span>{classificationError}</span>
+        </Alert>
+      )}
 
       {/* APL/BPL Classification Status Card */}
       {family && family.classification && family.classification !== 'pending' && (
