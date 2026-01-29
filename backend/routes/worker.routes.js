@@ -4,6 +4,7 @@
 import { Router } from 'express';
 import { body } from 'express-validator';
 import * as workerController from '../controllers/worker.controller.js';
+import * as welfareClassificationController from '../controllers/welfareClassification.controller.js';
 import { authenticate } from '../middleware/auth.middleware.js';
 import { authorize, govOnly, adminOnly } from '../middleware/role.middleware.js';
 import { validate, validateObjectId, validatePagination } from '../middleware/validation.middleware.js';
@@ -60,6 +61,50 @@ router.get(
   '/profile/welfare',
   authenticate,
   workerController.getMyWelfareStatus
+);
+
+/**
+ * @route GET /api/workers/profile/welfare-classification
+ * @desc Get current AI-based welfare classification
+ * @access Private (Worker)
+ */
+router.get(
+  '/profile/welfare-classification',
+  authenticate,
+  welfareClassificationController.getCurrentClassification
+);
+
+/**
+ * @route GET /api/workers/profile/welfare-classification/history
+ * @desc Get classification history
+ * @access Private (Worker)
+ */
+router.get(
+  '/profile/welfare-classification/history',
+  authenticate,
+  welfareClassificationController.getClassificationHistory
+);
+
+/**
+ * @route POST /api/workers/profile/welfare-classification/attempt
+ * @desc Attempt new APL/BPL classification (max 6 per year)
+ * @access Private (Worker)
+ */
+router.post(
+  '/profile/welfare-classification/attempt',
+  authenticate,
+  welfareClassificationController.attemptClassification
+);
+
+/**
+ * @route GET /api/workers/profile/welfare-classification/attempts-remaining
+ * @desc Get number of classification attempts remaining this year
+ * @access Private (Worker)
+ */
+router.get(
+  '/profile/welfare-classification/attempts-remaining',
+  authenticate,
+  welfareClassificationController.getAttemptsRemaining
 );
 
 /**

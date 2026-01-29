@@ -92,20 +92,41 @@ const WorkerDashboard: React.FC = () => {
   const [data, setData] = useState<DashboardData>(mockDashboardData);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [bplStatus, setBplStatus] = useState<'eligible' | 'not_eligible'>('not_eligible');
+  const [classificationInfo, setClassificationInfo] = useState<any>(null);
 
   useEffect(() => {
     const fetchData = async () => {
       try {
         setIsLoading(true);
         setError(null);
+        
+        // Fetch dashboard data
         const response = await get<{ success: boolean; data: DashboardData }>('/workers/profile/dashboard');
         if (response.success && response.data) {
           setData(response.data);
         }
+        
+        // Fetch APL/BPL classification status
+        try {
+          const classificationRes = await get<{ success: boolean; data: any }>('/workers/profile/welfare-classification');
+          if (classificationRes.success && classificationRes.data?.hasClassification) {
+            const classification = classificationRes.data.classification;
+            setBplStatus(classification.classification === 'BPL' ? 'eligible' : 'not_eligible');
+            setClassificationInfo(classification);
+          } else {
+            // Fallback to simple welfare status
+            const welfareRes = await get<{ success: boolean; data: any }>('/workers/profile/welfare');
+            if (welfareRes.success && welfareRes.data) {
+              setBplStatus(welfareRes.data.status === 'BPL' ? 'eligible' : 'not_eligible');
+            }
+          }
+        } catch (classErr) {
+          console.error('Classification fetch failed:', classErr);
+        }
       } catch (err: any) {
         console.error('Failed to fetch dashboard data:', err);
         setError('Failed to load dashboard data. Using cached data.');
-        // Fall back to mock data if API fails
       } finally {
         setIsLoading(false);
       }
@@ -121,10 +142,7 @@ const WorkerDashboard: React.FC = () => {
     );
   }
 
-  // Calculate BPL status based on annual income (last 12 months)
-  const annualIncome = data.monthlyIncome.reduce((sum, m) => sum + m.amount, 0);
-  const bplThreshold = 120000;
-  const bplStatus: 'eligible' | 'not_eligible' = annualIncome <= bplThreshold ? 'eligible' : 'not_eligible';
+  // Annual income is now fetched from classification data
 
   const stats = [
     {
@@ -178,6 +196,50 @@ const WorkerDashboard: React.FC = () => {
           <AlertCircle className="h-5 w-5 text-yellow-600" />
           <p className="text-yellow-800">{error}</p>
         </div>
+      )}
+
+      {/* APL/BPL Classification Status Card */}
+      {classificationInfo && (
+        <Card className={`border-2 ${bplStatus === 'eligible' ? 'border-orange-300 bg-orange-50' : 'border-green-300 bg-green-50'}`}>
+          <CardContent className="p-5">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+              <div className="flex items-center gap-4">
+                <div className={`p-3 rounded-full ${bplStatus === 'eligible' ? 'bg-orange-200' : 'bg-green-200'}`}>
+                  {bplStatus === 'eligible' ? (
+                    <BadgeCheck className="h-6 w-6 text-orange-700" />
+                  ) : (
+                    <BadgeCheck className="h-6 w-6 text-green-700" />
+                  )}
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className={`text-lg font-bold ${bplStatus === 'eligible' ? 'text-orange-800' : 'text-green-800'}`}>
+                      {bplStatus === 'eligible' ? 'Below Poverty Line (BPL)' : 'Above Poverty Line (APL)'}
+                    </h3>
+                    <Badge variant={bplStatus === 'eligible' ? 'warning' : 'success'}>
+                      {classificationInfo.classification}
+                    </Badge>
+                  </div>
+                  <p className="text-sm text-gray-600">
+                    Annual Income: {formatCurrency(classificationInfo.annualIncome || 0)}
+                    {classificationInfo.mlConfidence > 0 && (
+                      <span className="ml-2">• AI Confidence: {classificationInfo.mlConfidence}%</span>
+                    )}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Last classified: {classificationInfo.createdAt ? formatDate(classificationInfo.createdAt) : 'N/A'}
+                    {classificationInfo.attemptNumber && ` (Attempt ${classificationInfo.attemptNumber}/6 in ${classificationInfo.year})`}
+                  </p>
+                </div>
+              </div>
+              <Link to="/worker/welfare">
+                <Button variant="outline" size="sm">
+                  View Details <ArrowRight className="h-4 w-4 ml-1" />
+                </Button>
+              </Link>
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       {/* Verification Summary Card */}

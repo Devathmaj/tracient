@@ -7,9 +7,10 @@ import {
   Building2,
   IndianRupee,
   CheckCircle,
-  Clock,
-  AlertTriangle,
-  Eye
+  Eye,
+  ShieldCheck,
+  ShieldX,
+  User
 } from 'lucide-react';
 import { 
   Card, 
@@ -28,130 +29,144 @@ import {
 } from '@/components/common';
 import { formatCurrency, formatDate, formatDateTime } from '@/utils/formatters';
 import { CHART_COLORS } from '@/utils/constants';
+import { get } from '@/services/api';
 import type { Column } from '@/components/common/Table';
 
 interface WageRecord {
   id: string;
   employer: string;
+  employerName: string;
   employerId: string;
+  companyName: string;
   amount: number;
   date: string;
-  status: 'verified' | 'pending' | 'disputed';
+  status: 'verified' | 'pending' | 'disputed' | 'completed';
   paymentMethod: string;
   workType: string;
   hours?: number;
   transactionHash: string;
   blockNumber: number;
+  incomeSource: string;
+  isVerified: boolean;
+  source: string;
+  description?: string;
+  verifiedOnChain: boolean;
 }
 
-// Mock data
-const mockWageRecords: WageRecord[] = [
-  {
-    id: '1',
-    employer: 'ABC Construction Pvt Ltd',
-    employerId: 'EMP001',
-    amount: 12500,
-    date: '2024-06-15T10:30:00Z',
-    status: 'verified',
-    paymentMethod: 'Bank Transfer',
-    workType: 'Daily Wage',
-    hours: 8,
-    transactionHash: '0x1234567890abcdef1234567890abcdef12345678',
-    blockNumber: 12345,
-  },
-  {
-    id: '2',
-    employer: 'XYZ Industries',
-    employerId: 'EMP002',
-    amount: 8500,
-    date: '2024-06-01T14:00:00Z',
-    status: 'verified',
-    paymentMethod: 'Cash',
-    workType: 'Contract',
-    transactionHash: '0xabcdef1234567890abcdef1234567890abcdef12',
-    blockNumber: 12340,
-  },
-  {
-    id: '3',
-    employer: 'ABC Construction Pvt Ltd',
-    employerId: 'EMP001',
-    amount: 11000,
-    date: '2024-05-15T09:00:00Z',
-    status: 'verified',
-    paymentMethod: 'Bank Transfer',
-    workType: 'Daily Wage',
-    hours: 8,
-    transactionHash: '0x9876543210fedcba9876543210fedcba98765432',
-    blockNumber: 12300,
-  },
-  {
-    id: '4',
-    employer: 'Daily Labor Pool',
-    employerId: 'EMP003',
-    amount: 5500,
-    date: '2024-05-10T08:00:00Z',
-    status: 'pending',
-    paymentMethod: 'Cash',
-    workType: 'Daily Wage',
-    hours: 6,
-    transactionHash: '0xfedcba9876543210fedcba9876543210fedcba98',
-    blockNumber: 12290,
-  },
-  {
-    id: '5',
-    employer: 'Green Farms',
-    employerId: 'EMP004',
-    amount: 7000,
-    date: '2024-05-01T07:00:00Z',
-    status: 'disputed',
-    paymentMethod: 'UPI',
-    workType: 'Seasonal',
-    transactionHash: '0x1111222233334444555566667777888899990000',
-    blockNumber: 12280,
-  },
-];
-
-const monthlyData = [
-  { month: 'Jan', amount: 35000 },
-  { month: 'Feb', amount: 42000 },
-  { month: 'Mar', amount: 38000 },
-  { month: 'Apr', amount: 45000 },
-  { month: 'May', amount: 41500 },
-  { month: 'Jun', amount: 21000 },
-];
+// Mock data removed - now fetching from API
 
 const WageHistory: React.FC = () => {
   const [records, setRecords] = useState<WageRecord[]>([]);
+  const [monthlyData, setMonthlyData] = useState<Array<{ month: string; amount: number }>>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [dateRange, setDateRange] = useState('all');
+  const [paymentMethodFilter, setPaymentMethodFilter] = useState('all');
+  const [sourceFilter, setSourceFilter] = useState('all');
   const [selectedRecord, setSelectedRecord] = useState<WageRecord | null>(null);
 
   useEffect(() => {
     const fetchRecords = async () => {
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      setRecords(mockWageRecords);
-      setIsLoading(false);
+      try {
+        setIsLoading(true);
+        // Fetch transactions from API
+        const response = await get<{ success: boolean; data: { transactions: any[]; summary: any } }>('/workers/profile/transactions');
+        if (response.success && response.data?.transactions) {
+          // Map API response to WageRecord format
+          const mappedRecords: WageRecord[] = response.data.transactions.map((t) => ({
+            id: t.id || t._id,
+            employer: t.incomeSource || t.employerDetails?.companyName || 'Unknown Source',
+            employerName: t.employerDetails?.name || t.paidByName || '',
+            employerId: t.employerId || '',
+            companyName: t.employerDetails?.companyName || t.incomeSource || '',
+            amount: t.amount || 0,
+            date: t.date || t.createdAt,
+            status: t.isVerified ? 'verified' as const : 'pending' as const,
+            paymentMethod: t.paymentMethod || 'Cash',
+            workType: t.workType || t.description || 'General Labor',
+            transactionHash: t.blockchainTxId || '',
+            blockNumber: t.blockNumber || 0,
+            incomeSource: t.incomeSource || 'Self Declared',
+            isVerified: t.isVerified || false,
+            source: t.source || 'self_declared',
+            description: t.description || '',
+            verifiedOnChain: t.verifiedOnChain || !!t.blockchainTxId
+          }));
+          setRecords(mappedRecords);
+          
+          // Calculate monthly data from transactions
+          const monthlyMap: Record<string, number> = {};
+          const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+          mappedRecords.forEach((r) => {
+            const d = new Date(r.date);
+            const monthKey = months[d.getMonth()];
+            monthlyMap[monthKey] = (monthlyMap[monthKey] || 0) + r.amount;
+          });
+          
+          const monthlyArr = months.map(m => ({ month: m, amount: monthlyMap[m] || 0 })).filter(m => m.amount > 0);
+          setMonthlyData(monthlyArr.length > 0 ? monthlyArr : [{ month: 'No Data', amount: 0 }]);
+        }
+      } catch (error) {
+        console.error('Failed to fetch wage records:', error);
+        // Fallback to empty
+        setRecords([]);
+        setMonthlyData([{ month: 'No Data', amount: 0 }]);
+      } finally {
+        setIsLoading(false);
+      }
     };
     fetchRecords();
   }, []);
 
   const filteredRecords = records.filter(record => {
-    const matchesSearch = record.employer.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesStatus = statusFilter === 'all' || record.status === statusFilter;
-    return matchesSearch && matchesStatus;
+    const matchesSearch = (record.employer || record.incomeSource || record.companyName || '').toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesStatus = statusFilter === 'all' || 
+      (statusFilter === 'verified' && record.isVerified) ||
+      (statusFilter === 'unverified' && !record.isVerified);
+    
+    // Date range filter
+    let matchesDate = true;
+    if (dateRange !== 'all') {
+      const recordDate = new Date(record.date);
+      const now = new Date();
+      switch (dateRange) {
+        case '7d':
+          matchesDate = recordDate >= new Date(now.setDate(now.getDate() - 7));
+          break;
+        case '30d':
+          matchesDate = recordDate >= new Date(now.setDate(now.getDate() - 30));
+          break;
+        case '90d':
+          matchesDate = recordDate >= new Date(now.setDate(now.getDate() - 90));
+          break;
+        case '1y':
+          matchesDate = recordDate >= new Date(now.setFullYear(now.getFullYear() - 1));
+          break;
+      }
+    }
+    
+    // Payment method filter
+    const matchesPaymentMethod = paymentMethodFilter === 'all' || 
+      record.paymentMethod.toLowerCase() === paymentMethodFilter.toLowerCase();
+    
+    // Source filter (employer vs self-declared)
+    const matchesSource = sourceFilter === 'all' ||
+      (sourceFilter === 'employer' && record.source === 'employer') ||
+      (sourceFilter === 'self_declared' && record.source !== 'employer');
+    
+    return matchesSearch && matchesStatus && matchesDate && matchesPaymentMethod && matchesSource;
   });
 
   const totalEarnings = filteredRecords.reduce((sum, r) => sum + r.amount, 0);
-  const verifiedCount = filteredRecords.filter(r => r.status === 'verified').length;
-  const pendingCount = filteredRecords.filter(r => r.status === 'pending').length;
+  const verifiedCount = filteredRecords.filter(r => r.isVerified).length;
+  const unverifiedCount = filteredRecords.filter(r => !r.isVerified).length;
+  const verifiedAmount = filteredRecords.filter(r => r.isVerified).reduce((sum, r) => sum + r.amount, 0);
 
   const statusOptions = [
     { value: 'all', label: 'All Status' },
-    { value: 'verified', label: 'Verified' },
-    { value: 'pending', label: 'Pending' },
-    { value: 'disputed', label: 'Disputed' },
+    { value: 'verified', label: 'Verified Only' },
+    { value: 'unverified', label: 'Unverified Only' },
   ];
 
   const dateRangeOptions = [
@@ -162,6 +177,20 @@ const WageHistory: React.FC = () => {
     { value: '1y', label: 'Last Year' },
   ];
 
+  const paymentMethodOptions = [
+    { value: 'all', label: 'All Payment Methods' },
+    { value: 'bank_transfer', label: 'Bank Transfer' },
+    { value: 'upi', label: 'UPI' },
+    { value: 'cash', label: 'Cash' },
+    { value: 'cheque', label: 'Cheque' },
+  ];
+
+  const sourceOptions = [
+    { value: 'all', label: 'All Sources' },
+    { value: 'employer', label: 'Employer Payments' },
+    { value: 'self_declared', label: 'Self Declared' },
+  ];
+
   const columns: Column<WageRecord>[] = [
     {
       key: 'date',
@@ -170,21 +199,44 @@ const WageHistory: React.FC = () => {
       render: (record) => (
         <div className="flex items-center gap-2">
           <Calendar className="h-4 w-4 text-gray-400" />
-          <span>{formatDate(record.date)}</span>
+          <div>
+            <span className="block">{formatDate(record.date)}</span>
+          </div>
         </div>
       ),
     },
     {
       key: 'employer',
-      header: 'Employer',
+      header: 'Organization / Source',
       sortable: true,
       render: (record) => (
         <div className="flex items-center gap-2">
-          <Building2 className="h-4 w-4 text-gray-400" />
+          {record.source === 'employer' || record.employerId ? (
+            <Building2 className="h-4 w-4 text-blue-500" />
+          ) : (
+            <User className="h-4 w-4 text-gray-400" />
+          )}
           <div>
-            <p className="font-medium text-gray-900">{record.employer}</p>
-            <p className="text-xs text-gray-500">{record.workType}</p>
+            <p className="font-medium text-gray-900">{record.companyName || record.incomeSource || record.employer}</p>
+            {record.employerName && (
+              <p className="text-xs text-blue-600">Paid by: {record.employerName}</p>
+            )}
+            <p className="text-xs text-gray-500">
+              {record.source === 'employer' || record.employerId ? '✓ Employer Payment' : '○ Self Declared'}
+            </p>
           </div>
+        </div>
+      ),
+    },
+    {
+      key: 'workType',
+      header: 'Work Type',
+      render: (record) => (
+        <div>
+          <p className="text-gray-600">{record.workType}</p>
+          {record.description && record.description !== record.workType && (
+            <p className="text-xs text-gray-400">{record.description}</p>
+          )}
         </div>
       ),
     },
@@ -201,27 +253,36 @@ const WageHistory: React.FC = () => {
     },
     {
       key: 'paymentMethod',
-      header: 'Payment',
-      render: (record) => <span className="text-gray-600">{record.paymentMethod}</span>,
+      header: 'Payment Method',
+      render: (record) => (
+        <div className="flex items-center gap-1">
+          <span className="text-gray-600 capitalize">{record.paymentMethod?.replace('_', ' ')}</span>
+          {record.verifiedOnChain && (
+            <span title="Verified on Blockchain">
+              <CheckCircle className="h-3 w-3 text-green-500" />
+            </span>
+          )}
+        </div>
+      ),
     },
     {
-      key: 'status',
+      key: 'isVerified',
       header: 'Status',
-      render: (record) => {
-        const statusConfig = {
-          verified: { icon: CheckCircle, color: 'success' as const, label: 'Verified' },
-          pending: { icon: Clock, color: 'warning' as const, label: 'Pending' },
-          disputed: { icon: AlertTriangle, color: 'error' as const, label: 'Disputed' },
-        };
-        const config = statusConfig[record.status];
-        const Icon = config.icon;
-        return (
-          <Badge variant={config.color} className="flex items-center gap-1 w-fit">
-            <Icon className="h-3 w-3" />
-            {config.label}
-          </Badge>
-        );
-      },
+      render: (record) => (
+        <div className="flex items-center gap-2">
+          {record.isVerified ? (
+            <Badge variant="success" className="flex items-center gap-1 w-fit">
+              <ShieldCheck className="h-3 w-3" />
+              Verified
+            </Badge>
+          ) : (
+            <Badge variant="warning" className="flex items-center gap-1 w-fit">
+              <ShieldX className="h-3 w-3" />
+              Unverified
+            </Badge>
+          )}
+        </div>
+      ),
     },
     {
       key: 'actions',
@@ -261,7 +322,7 @@ const WageHistory: React.FC = () => {
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Card>
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
@@ -271,6 +332,19 @@ const WageHistory: React.FC = () => {
               </div>
               <div className="p-3 rounded-xl bg-primary-100">
                 <IndianRupee className="h-6 w-6 text-primary-600" />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-500">Verified Amount</p>
+                <p className="text-2xl font-bold text-green-600">{formatCurrency(verifiedAmount)}</p>
+              </div>
+              <div className="p-3 rounded-xl bg-green-100">
+                <ShieldCheck className="h-6 w-6 text-green-600" />
               </div>
             </div>
           </CardContent>
@@ -292,11 +366,11 @@ const WageHistory: React.FC = () => {
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm text-gray-500">Pending Verification</p>
-                <p className="text-2xl font-bold text-amber-600">{pendingCount}</p>
+                <p className="text-sm text-gray-500">Unverified Records</p>
+                <p className="text-2xl font-bold text-amber-600">{unverifiedCount}</p>
               </div>
               <div className="p-3 rounded-xl bg-amber-100">
-                <Clock className="h-6 w-6 text-amber-600" />
+                <ShieldX className="h-6 w-6 text-amber-600" />
               </div>
             </div>
           </CardContent>
@@ -321,11 +395,17 @@ const WageHistory: React.FC = () => {
 
       {/* Filters */}
       <Card>
-        <CardContent className="p-4">
-          <div className="flex flex-col md:flex-row gap-4">
-            <div className="flex-1">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-lg flex items-center gap-2">
+            <Filter className="h-5 w-5" />
+            Filters
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-4 pt-0">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
+            <div className="lg:col-span-2">
               <Input
-                placeholder="Search by employer..."
+                placeholder="Search by employer, company..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 leftIcon={<Search className="h-4 w-4" />}
@@ -335,19 +415,77 @@ const WageHistory: React.FC = () => {
               options={statusOptions}
               value={statusFilter}
               onChange={(value) => setStatusFilter(value)}
-              className="w-full md:w-40"
+              className="w-full"
+            />
+            <Select
+              options={sourceOptions}
+              value={sourceFilter}
+              onChange={(value) => setSourceFilter(value)}
+              className="w-full"
+            />
+            <Select
+              options={paymentMethodOptions}
+              value={paymentMethodFilter}
+              onChange={(value) => setPaymentMethodFilter(value)}
+              className="w-full"
             />
             <Select
               options={dateRangeOptions}
               value={dateRange}
               onChange={(value) => setDateRange(value)}
-              className="w-full md:w-40"
+              className="w-full"
             />
-            <Button variant="outline">
-              <Filter className="h-4 w-4 mr-2" />
-              More Filters
-            </Button>
           </div>
+          {/* Active Filters Display */}
+          {(statusFilter !== 'all' || sourceFilter !== 'all' || paymentMethodFilter !== 'all' || dateRange !== 'all' || searchQuery) && (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <span className="text-sm text-gray-500">Active filters:</span>
+              {searchQuery && (
+                <Badge variant="gray" className="flex items-center gap-1">
+                  Search: "{searchQuery}"
+                  <button onClick={() => setSearchQuery('')} className="ml-1 hover:text-red-500">×</button>
+                </Badge>
+              )}
+              {statusFilter !== 'all' && (
+                <Badge variant="gray" className="flex items-center gap-1">
+                  {statusOptions.find(o => o.value === statusFilter)?.label}
+                  <button onClick={() => setStatusFilter('all')} className="ml-1 hover:text-red-500">×</button>
+                </Badge>
+              )}
+              {sourceFilter !== 'all' && (
+                <Badge variant="gray" className="flex items-center gap-1">
+                  {sourceOptions.find(o => o.value === sourceFilter)?.label}
+                  <button onClick={() => setSourceFilter('all')} className="ml-1 hover:text-red-500">×</button>
+                </Badge>
+              )}
+              {paymentMethodFilter !== 'all' && (
+                <Badge variant="gray" className="flex items-center gap-1">
+                  {paymentMethodOptions.find(o => o.value === paymentMethodFilter)?.label}
+                  <button onClick={() => setPaymentMethodFilter('all')} className="ml-1 hover:text-red-500">×</button>
+                </Badge>
+              )}
+              {dateRange !== 'all' && (
+                <Badge variant="gray" className="flex items-center gap-1">
+                  {dateRangeOptions.find(o => o.value === dateRange)?.label}
+                  <button onClick={() => setDateRange('all')} className="ml-1 hover:text-red-500">×</button>
+                </Badge>
+              )}
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                onClick={() => {
+                  setSearchQuery('');
+                  setStatusFilter('all');
+                  setSourceFilter('all');
+                  setPaymentMethodFilter('all');
+                  setDateRange('all');
+                }}
+                className="text-red-500 hover:text-red-700"
+              >
+                Clear All
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -381,8 +519,11 @@ const WageHistory: React.FC = () => {
           <div className="space-y-6">
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <p className="text-sm text-gray-500">Employer</p>
-                <p className="font-medium text-gray-900">{selectedRecord.employer}</p>
+                <p className="text-sm text-gray-500">Income Source</p>
+                <p className="font-medium text-gray-900">{selectedRecord.incomeSource || selectedRecord.employer}</p>
+                <p className="text-xs text-gray-500">
+                  {selectedRecord.source === 'employer' || selectedRecord.employerId ? 'Employer Payment' : 'Self Declared'}
+                </p>
               </div>
               <div>
                 <p className="text-sm text-gray-500">Amount</p>
@@ -401,10 +542,40 @@ const WageHistory: React.FC = () => {
                 <p className="font-medium text-gray-900">{selectedRecord.workType}</p>
               </div>
               <div>
-                <p className="text-sm text-gray-500">Status</p>
-                <Badge variant={selectedRecord.status === 'verified' ? 'success' : selectedRecord.status === 'pending' ? 'warning' : 'error'}>
-                  {selectedRecord.status}
-                </Badge>
+                <p className="text-sm text-gray-500">Verification Status</p>
+                {selectedRecord.isVerified ? (
+                  <Badge variant="success" className="flex items-center gap-1 w-fit">
+                    <ShieldCheck className="h-3 w-3" />
+                    Verified
+                  </Badge>
+                ) : (
+                  <Badge variant="warning" className="flex items-center gap-1 w-fit">
+                    <ShieldX className="h-3 w-3" />
+                    Unverified
+                  </Badge>
+                )}
+              </div>
+            </div>
+
+            {/* Verification Info */}
+            <div className={`p-4 rounded-lg ${selectedRecord.isVerified ? 'bg-green-50 border border-green-200' : 'bg-orange-50 border border-orange-200'}`}>
+              <div className="flex items-start gap-3">
+                {selectedRecord.isVerified ? (
+                  <ShieldCheck className="h-5 w-5 text-green-600 mt-0.5" />
+                ) : (
+                  <ShieldX className="h-5 w-5 text-orange-600 mt-0.5" />
+                )}
+                <div>
+                  <p className={`font-medium ${selectedRecord.isVerified ? 'text-green-800' : 'text-orange-800'}`}>
+                    {selectedRecord.isVerified ? 'Income Verified' : 'Income Not Verified'}
+                  </p>
+                  <p className={`text-sm mt-1 ${selectedRecord.isVerified ? 'text-green-700' : 'text-orange-700'}`}>
+                    {selectedRecord.isVerified 
+                      ? 'This income was paid directly by an employer and is verified on the system.'
+                      : 'This income is self-declared and not verified by an employer. Self-declared income may receive lower weightage in welfare calculations.'
+                    }
+                  </p>
+                </div>
               </div>
             </div>
 
@@ -413,11 +584,11 @@ const WageHistory: React.FC = () => {
               <div className="space-y-2 bg-gray-50 p-4 rounded-lg">
                 <div>
                   <p className="text-xs text-gray-500">Transaction Hash</p>
-                  <p className="text-sm font-mono text-gray-700 break-all">{selectedRecord.transactionHash}</p>
+                  <p className="text-sm font-mono text-gray-700 break-all">{selectedRecord.transactionHash || 'Not recorded on blockchain'}</p>
                 </div>
                 <div>
                   <p className="text-xs text-gray-500">Block Number</p>
-                  <p className="text-sm font-mono text-gray-700">{selectedRecord.blockNumber}</p>
+                  <p className="text-sm font-mono text-gray-700">{selectedRecord.blockNumber || 'N/A'}</p>
                 </div>
               </div>
             </div>
@@ -426,11 +597,6 @@ const WageHistory: React.FC = () => {
               <Button variant="outline" onClick={() => setSelectedRecord(null)}>
                 Close
               </Button>
-              {selectedRecord.status === 'disputed' && (
-                <Button variant="danger">
-                  Raise Dispute
-                </Button>
-              )}
             </div>
           </div>
         )}

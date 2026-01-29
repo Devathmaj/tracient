@@ -658,7 +658,7 @@ export const getMyTransactions = async (req, res) => {
       return notFoundResponse(res, 'Worker profile not found');
     }
     
-    const { page = 1, limit = 10, startDate, endDate, status } = req.query;
+    const { page = 1, limit = 100, startDate, endDate, status } = req.query;
     
     const query = { workerId: worker._id };
     
@@ -669,14 +669,36 @@ export const getMyTransactions = async (req, res) => {
       if (endDate) query.createdAt.$lte = new Date(endDate);
     }
     
-    const result = await paginateQuery(WageRecord, query, {
-      page: parseInt(page),
-      limit: parseInt(limit),
-      sort: { createdAt: -1 },
-      populate: { path: 'employerId', select: 'companyName contactPerson' }
-    });
+    const transactions = await WageRecord.find(query)
+      .populate('employerId', 'companyName contactPerson')
+      .sort({ createdAt: -1 })
+      .limit(parseInt(limit));
     
-    return paginatedResponse(res, result);
+    // Transform transactions with proper incomeSource and isVerified
+    const transformedTransactions = transactions.map(t => ({
+      _id: t._id,
+      id: t._id,
+      amount: t.amount,
+      createdAt: t.createdAt,
+      completedAt: t.completedAt,
+      status: t.status,
+      paymentMethod: t.paymentMethod,
+      transactionType: t.transactionType,
+      description: t.description,
+      referenceNumber: t.referenceNumber,
+      // Income source: employer name if available, else custom incomeSource field
+      incomeSource: t.employerId?.companyName || t.incomeSource || 'Unknown Source',
+      employerId: t.employerId,
+      // Verified: employer payments are verified, self-declared are not
+      isVerified: t.isVerified || (t.employerId && t.source === 'employer') || t.verifiedOnChain || false,
+      verified: t.isVerified || (t.employerId && t.source === 'employer') || t.verifiedOnChain || false,
+      blockchainTxId: t.blockchainTxId,
+      blockNumber: t.blockNumber,
+      workPeriod: t.workPeriod,
+      source: t.source
+    }));
+    
+    return successResponse(res, transformedTransactions, transactions.length);
   } catch (error) {
     logger.error('Get my transactions error:', error);
     return errorResponse(res, error.message, 500);
@@ -1305,13 +1327,15 @@ export const getMyDashboard = async (req, res) => {
       date: w.createdAt,
       source: w.employerId?.companyName || w.incomeSource || 'Unknown',
       status: w.status,
-      verified: w.verifiedOnChain || false,
+      // Employer payments are verified, self-declared are not
+      verified: w.isVerified || (w.employerId && w.source === 'employer') || w.verifiedOnChain || false,
       paymentMethod: w.paymentMethod
     }));
 
-    // Verified vs unverified breakdown
-    const verifiedTotal = wageRecords.filter(w => w.verifiedOnChain).reduce((sum, w) => sum + w.amount, 0);
-    const unverifiedTotal = wageRecords.filter(w => !w.verifiedOnChain).reduce((sum, w) => sum + w.amount, 0);
+    // Verified vs unverified breakdown (based on isVerified field)
+    const verifiedRecords = wageRecords.filter(w => w.isVerified || (w.employerId && w.source === 'employer') || w.verifiedOnChain);
+    const verifiedTotal = verifiedRecords.reduce((sum, w) => sum + w.amount, 0);
+    const unverifiedTotal = totalEarnings - verifiedTotal;
 
     return successResponse(res, {
       totalEarnings,
@@ -1371,7 +1395,8 @@ export const getMyWelfareStatus = async (req, res) => {
     
     wageRecords.forEach(w => {
       const source = w.employerId?.companyName || w.incomeSource || 'Other';
-      const isVerified = w.verifiedOnChain || false;
+      // Employer payments are verified, self-declared are not
+      const isVerified = w.isVerified || (w.employerId && w.source === 'employer') || w.verifiedOnChain || false;
       const key = `${source}-${isVerified}`;
       
       if (!sourceMap[key]) {
@@ -1397,8 +1422,8 @@ export const getMyWelfareStatus = async (req, res) => {
     incomeBreakdown.sort((a, b) => b.amount - a.amount);
 
     // Verification statistics
-    const verifiedRecords = wageRecords.filter(w => w.verifiedOnChain);
-    const unverifiedRecords = wageRecords.filter(w => !w.verifiedOnChain);
+    const verifiedRecords = wageRecords.filter(w => w.isVerified || (w.employerId && w.source === 'employer') || w.verifiedOnChain);
+    const unverifiedRecords = wageRecords.filter(w => !(w.isVerified || (w.employerId && w.source === 'employer') || w.verifiedOnChain));
     
     const verifiedAmount = verifiedRecords.reduce((sum, w) => sum + w.amount, 0);
     const unverifiedAmount = unverifiedRecords.reduce((sum, w) => sum + w.amount, 0);
