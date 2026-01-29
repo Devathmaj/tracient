@@ -1160,10 +1160,10 @@ export const depositViaQR = async (req, res) => {
 
     await receiver.save();
 
-    // Create transaction record
+    // Create transaction record for receiver (credit)
     const transactionId = `TXN-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
     
-    const transaction = await UPITransaction.create({
+    const receiverTransaction = await UPITransaction.create({
       txId: transactionId,
       workerId: receiver._id,
       workerHash: workerIdHash,
@@ -1176,10 +1176,31 @@ export const depositViaQR = async (req, res) => {
       status: 'completed',
       mode: 'QR_SCAN',
       timestamp: new Date(),
-      completedAt: new Date()
+      completedAt: new Date(),
+      remarks: `CREDIT: Payment received from ${sender.name}`
+    });
+    
+    // Create transaction record for sender (debit/outgoing payment)
+    const senderTransactionId = `TXN-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+    
+    await UPITransaction.create({
+      txId: senderTransactionId,
+      workerId: sender._id,
+      workerHash: payerIdHash,
+      workerName: sender.name,
+      workerAccount: senderAccount.accountNumber,
+      senderName: receiver.name,  // Receiver name as the payment destination
+      senderPhone: receiver.phone,
+      senderAccount: receiverAccount.accountNumber,
+      amount: amount,  // Keep positive, use mode to distinguish
+      status: 'completed',
+      mode: 'QR_SCAN',
+      timestamp: new Date(),
+      completedAt: new Date(),
+      remarks: `DEBIT: Payment sent to ${receiver.name} (Account: ****${receiverAccount.accountNumber.slice(-4)})`
     });
 
-    // Log audit trail
+    // Log audit trail for receiver
     await AuditLog.log({
       action: 'payment_received',
       category: 'transaction',
@@ -1192,6 +1213,23 @@ export const depositViaQR = async (req, res) => {
         paymentMethod: 'QR_SCAN',
         senderId: sender._id,
         senderBalance: senderAccount.balance
+      }
+    });
+    
+    // Log audit trail for sender
+    await AuditLog.log({
+      action: 'payment_sent',
+      category: 'transaction',
+      userId: sender.userId,
+      resourceType: 'Worker',
+      resourceId: sender._id,
+      details: {
+        amount: amount,
+        transactionId: senderTransactionId,
+        paymentMethod: 'QR_SCAN',
+        receiverId: receiver._id,
+        newBalance: senderAccount.balance,
+        previousBalance: senderPreviousBalance
       }
     });
 

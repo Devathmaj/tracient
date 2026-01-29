@@ -47,37 +47,75 @@ export default function ScanQRPage() {
   const streamRef = useRef<MediaStream | null>(null);
 
   // Auto-load logged-in user's account info
+  // State to track if user info is loading
+  const [loadingProfile, setLoadingProfile] = useState(true);
+
   useEffect(() => {
     const loadUserProfile = async () => {
+      setLoadingProfile(true);
       try {
         const userStr = localStorage.getItem('user');
         const token = localStorage.getItem('accessToken');
         
-        if (userStr && token) {
-          const user = JSON.parse(userStr);
+        if (!userStr || !token) {
+          console.log('No user or token found in localStorage');
+          setLoadingProfile(false);
+          return;
+        }
+        
+        const user = JSON.parse(userStr);
+        
+        // Only fetch if user is a worker
+        if (user.role !== 'worker') {
+          console.log('User is not a worker:', user.role);
+          setLoadingProfile(false);
+          return;
+        }
+        
+        // API interceptor returns response.data directly, which contains { success, message, data }
+        const result: any = await api.get('/workers/profile');
+        console.log('Loaded worker profile:', result);
+        
+        // The actual data is inside result.data (from successResponse wrapper)
+        const profile = result.data || result;
+        
+        if (profile) {
+          // Profile structure: bankAccounts at root level, idHash is under personalInfo.aadhaarHash
+          const bankAccounts = profile.bankAccounts || [];
+          const defaultAccount = bankAccounts.find((acc: any) => acc.isDefault) || bankAccounts[0];
           
-          // Only fetch if user is a worker
-          if (user.role === 'worker') {
-            const response = await api.get('/workers/profile');
-            if (response.data) {
-              const worker = response.data;
-              const defaultAccount = worker.bankAccounts?.find((acc: any) => acc.isDefault) || worker.bankAccounts?.[0];
-              
-              if (defaultAccount && worker.idHash) {
-                setMyAccountInfo({
-                  idHash: worker.idHash,
-                  accountId: defaultAccount._id,
-                  workerName: worker.name,
-                  phone: worker.phone || '',
-                  balance: defaultAccount.balance || 0
-                });
-              }
+          // Get idHash from personalInfo.aadhaarHash
+          const idHash = profile.personalInfo?.aadhaarHash;
+          // Get name from personalInfo.firstName + lastName
+          const firstName = profile.personalInfo?.firstName || '';
+          const lastName = profile.personalInfo?.lastName || '';
+          const workerName = `${firstName} ${lastName}`.trim() || 'Unknown';
+          // Get phone from personalInfo.phone
+          const phone = profile.personalInfo?.phone || '';
+          
+          console.log('Extracted profile data:', { idHash, workerName, phone, defaultAccount });
+          
+          if (defaultAccount && idHash) {
+            setMyAccountInfo({
+              idHash: idHash,
+              accountId: defaultAccount._id,
+              workerName: workerName,
+              phone: phone,
+              balance: defaultAccount.balance || 0
+            });
+            console.log('MyAccountInfo set successfully');
+          } else {
+            console.warn('Missing defaultAccount or idHash:', { defaultAccount, idHash });
+            if (!idHash) {
+              toast.error('Could not load your account information. Please try refreshing the page.');
             }
           }
         }
-      } catch (error) {
-        // Silently fail - user might not be logged in or not a worker
-        console.log('Could not auto-load user profile:', error);
+      } catch (error: any) {
+        console.error('Could not auto-load user profile:', error);
+        toast.error('Failed to load your account information. Please refresh and try again.');
+      } finally {
+        setLoadingProfile(false);
       }
     };
 
@@ -140,12 +178,17 @@ export default function ScanQRPage() {
     try {
       console.log('Verifying QR token:', token.substring(0, 20) + '...');
       
-      const response = await api.post('/workers/qr/verify', {
+      // API interceptor returns response.data directly, which contains { success, message, data }
+      const result: any = await api.post('/workers/qr/verify', {
         token: token
       });
 
-      console.log('QR verification response:', response);
-      setPaymentDetails(response.data);
+      console.log('QR verification response:', result);
+      
+      // The actual data is inside result.data (from successResponse wrapper)
+      const responseData = result.data || result;
+      
+      setPaymentDetails(responseData);
       setStep('payment');
       setAmount('');
       setShowCamera(false);
@@ -191,9 +234,15 @@ export default function ScanQRPage() {
       return;
     }
     
+    // Check if profile is still loading
+    if (loadingProfile) {
+      toast.error('Loading your account information, please wait...');
+      return;
+    }
+    
     // Check if user is logged in with account info
     if (!myAccountInfo) {
-      toast.error('Please log in as a worker to make payments');
+      toast.error('Please log in as a worker to make payments. Your account information could not be loaded.');
       return;
     }
     
@@ -223,14 +272,20 @@ export default function ScanQRPage() {
         senderBalance: myAccountInfo.balance
       });
       
-      const response = await api.post('/workers/qr/deposit', payload);
+      // API interceptor returns response.data directly, which contains { success, message, data }
+      const result: any = await api.post('/workers/qr/deposit', payload);
 
-      setDepositResult(response.data);
+      console.log('Deposit result:', result);
+      
+      // The actual data is inside result.data (from successResponse wrapper)
+      const responseData = result.data || result;
+
+      setDepositResult(responseData);
       
       // Update local balance
       setMyAccountInfo({
         ...myAccountInfo,
-        balance: response.data.sender?.newBalance || (myAccountInfo.balance - paymentAmount)
+        balance: responseData.sender?.newBalance ?? (myAccountInfo.balance - paymentAmount)
       });
       
       toast.success('Payment successful!');
@@ -545,7 +600,7 @@ export default function ScanQRPage() {
                           </div>
                           <div className="flex justify-between pt-3">
                             <span className="text-gray-600">Sender New Balance</span>
-                            <span className="font-semibold text-gray-900">{formatCurrency(depositResult.sender.newBalance)}</span>
+                            <span className="font-semibold text-gray-900">{formatCurrency(depositResult.sender.newBalance ?? 0)}</span>
                           </div>
                         </>
                       )}
