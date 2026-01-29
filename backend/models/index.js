@@ -11,3 +11,4 @@ export { PolicyConfig, ClassificationOverride, SystemMetadata } from './PolicyCo
 export { AnomalyAlert } from './AnomalyAlert.js';
 export { AuditLog } from './AuditLog.js';
 export { Family } from './Family.js';
+export { WelfareClassification } from './WelfareClassification.js';
