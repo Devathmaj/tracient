@@ -7,41 +7,74 @@ import path from 'path';
 import { logger } from '../utils/logger.util.js';
 import { calculateBPLStatus, calculateIncomeTrend } from '../utils/bpl.util.js';
 import { AI_CONFIG } from '../config/constants.js';
+import { screenClassification } from './policyScreening.service.js';
 
 const AI_MODEL_PATH = process.env.AI_MODEL_PATH || path.resolve('..', 'ai-model');
 const AI_API_URL = AI_CONFIG.API_URL;
 
 /**
  * Classify household as APL/BPL using the AI model API
+ * Then apply policy screening to override if necessary
  * @param {Object} surveyData - Family survey data
- * @returns {Object} Classification result
+ * @returns {Object} Classification result (potentially modified by policies)
  */
 export const classifyHousehold = async (surveyData) => {
   try {
     logger.info('Calling APL/BPL classification API...');
     
-    // Try the Python API first
-    const response = await fetch(`${AI_API_URL}/classify`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(surveyData)
-    });
+    let result;
     
-    if (response.ok) {
-      const result = await response.json();
-      logger.info(`Classification result: ${result.classification} (${result.ml_prediction?.confidence || 0}% confidence)`);
-      return result;
+    // Try the Python API first
+    try {
+      const response = await fetch(`${AI_API_URL}/classify`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(surveyData)
+      });
+      
+      if (response.ok) {
+        result = await response.json();
+        logger.info(`AI Classification result: ${result.classification} (${result.ml_prediction?.confidence || 0}% confidence)`);
+      } else {
+        // If API fails, fall back to rule-based SECC analysis
+        logger.warn('AI API unavailable, using rule-based SECC analysis');
+        result = performSECCAnalysis(surveyData);
+      }
+    } catch (apiError) {
+      logger.warn('AI API error, falling back to SECC analysis:', apiError.message);
+      result = performSECCAnalysis(surveyData);
     }
     
-    // If API fails, fall back to rule-based SECC analysis
-    logger.warn('AI API unavailable, using rule-based SECC analysis');
-    return performSECCAnalysis(surveyData);
+    // Apply policy screening to the classification result
+    // This will check active policies and potentially override the classification
+    try {
+      const screenedResult = await screenClassification(result, surveyData);
+      
+      if (screenedResult.policy_overrides_applied && screenedResult.policy_overrides_applied.length > 0) {
+        logger.info(`Policy screening applied ${screenedResult.policy_overrides_applied.length} override(s). Final classification: ${screenedResult.classification}`);
+      }
+      
+      return screenedResult;
+    } catch (screeningError) {
+      logger.error('Policy screening error, returning unscreened result:', screeningError.message);
+      return {
+        ...result,
+        policy_screened: false,
+        policy_screening_error: screeningError.message
+      };
+    }
     
   } catch (error) {
-    logger.warn('AI API error, falling back to SECC analysis:', error.message);
-    return performSECCAnalysis(surveyData);
+    logger.error('Classification error:', error.message);
+    // Return a safe fallback
+    return {
+      success: false,
+      classification: 'pending',
+      reason: 'Classification failed: ' + error.message,
+      error: error.message
+    };
   }
 };
 
@@ -139,85 +172,244 @@ const performSECCAnalysis = (data) => {
 };
 
 /**
- * Detect anomalies in transaction data
+ * Detect anomalies in transaction data using AI API
+ * @param {Object} transactionData - Worker transaction/income data
+ * @returns {Object} Anomaly detection result
  */
 export const detectAnomaly = async (transactionData) => {
   try {
-    // Use rule-based detection as fallback if AI model not available
-    const ruleBasedResult = ruleBasedAnomalyDetection(transactionData);
+    logger.info('Calling Anomaly Detection API...');
     
-    // Try Python AI model
-    const aiResult = await runPythonModel('detect_anomaly', transactionData);
+    // Prepare data for AI API
+    const requestBody = {
+      worker_data: transactionData.worker_data || {
+        sector: transactionData.sector || 'other',
+        is_formal: transactionData.is_formal || 0,
+        income_tier: transactionData.income_tier || 'low',
+        account_age_months: transactionData.account_age_months || 12
+      },
+      pattern_data: transactionData.pattern_data || {
+        avg_tx_per_month: transactionData.avg_tx_per_month || transactionData.transactionCount || 5,
+        weekend_pct: transactionData.weekend_pct || 0.1,
+        night_hours_pct: transactionData.night_hours_pct || 0.05,
+        round_amount_pct: transactionData.round_amount_pct || 0.15,
+        near_50k_pct: transactionData.near_50k_pct || 0.05,
+        num_unique_sources: transactionData.num_unique_sources || 1,
+        source_concentration: transactionData.source_concentration || 0.9,
+        unverified_rate: transactionData.unverified_rate || 0.1,
+        velocity_change: transactionData.velocity_change || 1.0,
+        burst_ratio: transactionData.burst_ratio || 1.0,
+        cash_deposit_rate: transactionData.cash_deposit_rate || 0.1
+      },
+      income_data: transactionData.income_data || {
+        income_cv: transactionData.income_cv || 0.2,
+        max_mom_increase: transactionData.max_mom_increase || 0.3,
+        max_deviation_from_mean: transactionData.max_deviation_from_mean || 0.5,
+        monthly_incomes: transactionData.monthly_incomes || []
+      }
+    };
     
-    if (aiResult.success) {
+    // Calculate income_cv from historicalAvg if available
+    if (transactionData.amount && transactionData.historicalAvg) {
+      const deviation = Math.abs(transactionData.amount - transactionData.historicalAvg);
+      requestBody.income_data.max_deviation_from_mean = deviation / transactionData.historicalAvg;
+      requestBody.income_data.max_mom_increase = transactionData.amount / transactionData.historicalAvg;
+    }
+    
+    // Try the AI API first
+    const response = await fetch(`${AI_API_URL}/detect-anomaly`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(requestBody)
+    });
+    
+    if (response.ok) {
+      const result = await response.json();
+      logger.info(`Anomaly detection result: ${result.is_anomaly ? 'ANOMALY DETECTED' : 'Normal'} (score: ${result.anomaly_score})`);
       return {
         success: true,
-        isAnomaly: aiResult.data.is_anomaly || ruleBasedResult.isAnomaly,
-        confidence: aiResult.data.confidence || ruleBasedResult.confidence,
-        anomalyType: aiResult.data.anomaly_type || ruleBasedResult.type,
+        isAnomaly: result.is_anomaly,
+        anomalyScore: result.anomaly_score,
+        confidence: result.confidence,
+        severity: result.severity,
+        anomalyTypes: result.anomaly_types,
+        anomalyDescriptions: result.anomaly_descriptions,
         details: {
-          aiModel: aiResult.data,
-          ruleBased: ruleBasedResult
+          mlResult: result.ml_result,
+          detectionMethod: result.detection_method
         }
       };
     }
     
-    // Fallback to rule-based only
+    // If API fails, fall back to rule-based detection
+    logger.warn('AI API unavailable, using rule-based anomaly detection');
+    const ruleBasedResult = ruleBasedAnomalyDetection(transactionData);
     return {
       success: true,
       isAnomaly: ruleBasedResult.isAnomaly,
       confidence: ruleBasedResult.confidence,
-      anomalyType: ruleBasedResult.type,
+      anomalyScore: ruleBasedResult.confidence,
+      severity: ruleBasedResult.isAnomaly ? 'medium' : 'low',
+      anomalyTypes: ruleBasedResult.type ? [ruleBasedResult.type] : [],
       details: { ruleBased: ruleBasedResult },
       note: 'AI model unavailable, using rule-based detection'
     };
+    
   } catch (error) {
-    logger.error('Anomaly detection failed:', error.message);
+    logger.warn('AI API error, falling back to rule-based detection:', error.message);
+    const ruleBasedResult = ruleBasedAnomalyDetection(transactionData);
+    return {
+      success: true,
+      isAnomaly: ruleBasedResult.isAnomaly,
+      confidence: ruleBasedResult.confidence,
+      anomalyScore: ruleBasedResult.confidence,
+      severity: ruleBasedResult.isAnomaly ? 'medium' : 'low',
+      anomalyTypes: ruleBasedResult.type ? [ruleBasedResult.type] : [],
+      details: { ruleBased: ruleBasedResult },
+      note: 'AI model unavailable, using rule-based detection'
+    };
+  }
+};
+
+/**
+ * Batch detect anomalies for multiple workers
+ * @param {Array} workers - Array of worker data objects
+ * @returns {Object} Batch anomaly detection results
+ */
+export const batchDetectAnomalies = async (workers) => {
+  try {
+    logger.info(`Calling Batch Anomaly Detection API for ${workers.length} workers...`);
+    
+    const response = await fetch(`${AI_API_URL}/batch-detect-anomaly`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ workers })
+    });
+    
+    if (response.ok) {
+      const result = await response.json();
+      logger.info(`Batch anomaly scan complete: ${result.anomalies_found}/${result.total_scanned} anomalies found`);
+      return {
+        success: true,
+        totalScanned: result.total_scanned,
+        anomaliesFound: result.anomalies_found,
+        results: result.results,
+        detectionMethod: result.detection_method
+      };
+    }
+    
+    // Fallback: Process individually with rule-based
+    logger.warn('Batch API unavailable, processing individually');
+    const results = workers.map(worker => {
+      const ruleResult = ruleBasedAnomalyDetection(worker);
+      return {
+        worker_id: worker.worker_id || 'unknown',
+        is_anomaly: ruleResult.isAnomaly,
+        anomaly_score: ruleResult.confidence,
+        severity: ruleResult.isAnomaly ? 'medium' : 'low',
+        anomaly_types: ruleResult.type ? [ruleResult.type] : []
+      };
+    });
+    
+    return {
+      success: true,
+      totalScanned: workers.length,
+      anomaliesFound: results.filter(r => r.is_anomaly).length,
+      results,
+      detectionMethod: 'rules_only',
+      note: 'API unavailable, used rule-based detection'
+    };
+    
+  } catch (error) {
+    logger.error('Batch anomaly detection failed:', error.message);
     return { success: false, error: error.message };
   }
 };
 
 /**
  * Rule-based anomaly detection
+ * Works with data from government controller's runAnomalyScan
  */
 const ruleBasedAnomalyDetection = (data) => {
-  const { amount, historicalAvg, transactionCount24h, lastTransactionTime } = data;
+  // Handle both old format and new format from runAnomalyScan
+  const patternData = data.pattern_data || {};
+  const incomeData = data.income_data || {};
   
   let isAnomaly = false;
   let confidence = 0;
   let type = null;
   const reasons = [];
   
-  // Check for amount spike
-  if (historicalAvg && amount > historicalAvg * 3) {
-    isAnomaly = true;
-    confidence += 40;
-    type = 'income_spike';
-    reasons.push(`Amount ${amount} is ${(amount / historicalAvg * 100).toFixed(0)}% of average`);
-  }
-  
-  // Check for high frequency
-  if (transactionCount24h > 50) {
+  // Check for income spike using income_cv (coefficient of variation)
+  const incomeCv = incomeData.income_cv || 0;
+  if (incomeCv > 0.8) {
     isAnomaly = true;
     confidence += 30;
-    type = type || 'high_frequency';
-    reasons.push(`${transactionCount24h} transactions in 24 hours`);
+    type = 'income_spike';
+    reasons.push(`High income variability: CV = ${(incomeCv * 100).toFixed(1)}%`);
   }
   
-  // Check for duplicate transactions (same amount within 5 minutes)
-  if (lastTransactionTime) {
-    const timeDiff = Date.now() - new Date(lastTransactionTime).getTime();
-    if (timeDiff < 5 * 60 * 1000) {
-      confidence += 20;
-      type = type || 'duplicate_transaction';
-      reasons.push('Transaction within 5 minutes of previous');
+  // Check for large month-over-month increase
+  const maxMomIncrease = incomeData.max_mom_increase || 0;
+  if (maxMomIncrease > 3) { // 300% increase
+    isAnomaly = true;
+    confidence += 40;
+    type = type || 'income_spike';
+    reasons.push(`Large income spike: ${(maxMomIncrease * 100).toFixed(0)}% increase`);
+  }
+  
+  // Check for max deviation from mean
+  const maxDeviation = incomeData.max_deviation_from_mean || 0;
+  if (maxDeviation > 3) { // 3x average
+    isAnomaly = true;
+    confidence += 35;
+    type = type || 'unusual_amount';
+    reasons.push(`Transaction ${(maxDeviation * 100).toFixed(0)}% above average`);
+  }
+  
+  // Check for high unverified transaction rate
+  const unverifiedRate = patternData.unverified_rate || 0;
+  if (unverifiedRate > 0.5) {
+    confidence += 15;
+    reasons.push(`High unverified rate: ${(unverifiedRate * 100).toFixed(0)}%`);
+  }
+  
+  // Check for weekend/night transaction patterns
+  const weekendPct = patternData.weekend_pct || 0;
+  const nightHoursPct = patternData.night_hours_pct || 0;
+  if (weekendPct > 0.5 || nightHoursPct > 0.3) {
+    confidence += 10;
+    reasons.push('Unusual timing patterns');
+  }
+  
+  // Check for high burst ratio (max transaction vs average)
+  const burstRatio = patternData.burst_ratio || 1;
+  if (burstRatio > 5) { // One transaction 5x the average
+    isAnomaly = true;
+    confidence += 25;
+    type = type || 'unusual_amount';
+    reasons.push(`Burst transaction: ${burstRatio.toFixed(1)}x average`);
+  }
+  
+  // Legacy support for old format
+  if (data.amount && data.historicalAvg) {
+    if (data.amount > data.historicalAvg * 3) {
+      isAnomaly = true;
+      confidence += 40;
+      type = 'income_spike';
+      reasons.push(`Amount ${data.amount} is ${(data.amount / data.historicalAvg * 100).toFixed(0)}% of average`);
     }
   }
   
-  // Check for unusual amount
-  if (amount > 100000) {
-    confidence += 10;
-    reasons.push('High value transaction');
+  if (data.transactionCount24h > 50) {
+    isAnomaly = true;
+    confidence += 30;
+    type = type || 'high_frequency';
+    reasons.push(`${data.transactionCount24h} transactions in 24 hours`);
   }
   
   return {

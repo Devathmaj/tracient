@@ -12,7 +12,9 @@ import {
   ChevronRight,
   User,
   Building2,
-  IndianRupee
+  IndianRupee,
+  Scan,
+  Loader2
 } from 'lucide-react';
 import { 
   Card, 
@@ -27,6 +29,7 @@ import {
   StatCard
 } from '@/components/common';
 import { formatCurrency, formatDate } from '@/utils/formatters';
+import { API_BASE_URL } from '@/utils/constants';
 
 interface Anomaly {
   id: string;
@@ -50,125 +53,9 @@ interface Anomaly {
   };
 }
 
-const mockAnomalies: Anomaly[] = [
-  {
-    id: 'ANM001',
-    type: 'duplicate_payment',
-    severity: 'critical',
-    status: 'pending',
-    workerId: 'W001',
-    workerName: 'Rajesh Kumar',
-    employerId: 'E001',
-    employerName: 'ABC Construction',
-    amount: 45000,
-    detectedAt: '2024-01-15T10:30:00',
-    description: 'Duplicate payment detected for the same work period',
-    confidence: 98,
-    details: {
-      pattern: 'Same amount paid twice within 24 hours',
-      previousValue: '₹45,000 on Jan 14',
-      actualValue: '₹45,000 on Jan 15',
-    },
-  },
-  {
-    id: 'ANM002',
-    type: 'unusual_amount',
-    severity: 'high',
-    status: 'investigating',
-    workerId: 'W023',
-    workerName: 'Priya Sharma',
-    employerId: 'E005',
-    employerName: 'Tech Solutions',
-    amount: 150000,
-    detectedAt: '2024-01-14T14:20:00',
-    description: 'Payment amount 500% higher than average',
-    confidence: 92,
-    details: {
-      pattern: 'Significant deviation from historical average',
-      expectedRange: '₹25,000 - ₹35,000',
-      actualValue: '₹1,50,000',
-    },
-  },
-  {
-    id: 'ANM003',
-    type: 'frequency_anomaly',
-    severity: 'medium',
-    status: 'pending',
-    workerId: 'W045',
-    workerName: 'Amit Singh',
-    employerId: 'E012',
-    employerName: 'Green Farms',
-    amount: 18000,
-    detectedAt: '2024-01-14T09:15:00',
-    description: 'Unusual payment frequency detected',
-    confidence: 78,
-    details: {
-      pattern: '15 payments in 7 days',
-      frequency: 15,
-      expectedRange: '1-4 payments per week',
-    },
-  },
-  {
-    id: 'ANM004',
-    type: 'income_spike',
-    severity: 'high',
-    status: 'resolved',
-    workerId: 'W067',
-    workerName: 'Sunita Devi',
-    employerId: 'E008',
-    employerName: 'City Services',
-    amount: 85000,
-    detectedAt: '2024-01-13T16:45:00',
-    description: 'Sudden income increase may affect BPL eligibility',
-    confidence: 88,
-    details: {
-      pattern: 'Income jumped from ₹15,000/month to ₹85,000/month',
-      previousValue: '₹15,000/month',
-      actualValue: '₹85,000/month',
-    },
-  },
-  {
-    id: 'ANM005',
-    type: 'identity_mismatch',
-    severity: 'critical',
-    status: 'investigating',
-    workerId: 'W089',
-    workerName: 'Unknown Entity',
-    employerId: 'E015',
-    employerName: 'Metro Builders',
-    amount: 65000,
-    detectedAt: '2024-01-12T11:30:00',
-    description: 'Worker identity could not be verified against Aadhaar',
-    confidence: 95,
-    details: {
-      pattern: 'Aadhaar verification failed',
-      actualValue: 'XXXX-XXXX-4567',
-    },
-  },
-  {
-    id: 'ANM006',
-    type: 'unusual_amount',
-    severity: 'low',
-    status: 'dismissed',
-    workerId: 'W102',
-    workerName: 'Mohan Lal',
-    employerId: 'E003',
-    employerName: 'Steel Works',
-    amount: 42000,
-    detectedAt: '2024-01-11T08:00:00',
-    description: 'Payment slightly above expected range',
-    confidence: 62,
-    details: {
-      pattern: 'Minor deviation from average',
-      expectedRange: '₹30,000 - ₹38,000',
-      actualValue: '₹42,000',
-    },
-  },
-];
-
 const AnomalyAlerts: React.FC = () => {
   const [anomalies, setAnomalies] = useState<Anomaly[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [severityFilter, setSeverityFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -176,26 +63,171 @@ const AnomalyAlerts: React.FC = () => {
   const [selectedAnomaly, setSelectedAnomaly] = useState<Anomaly | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState('all');
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanResult, setScanResult] = useState<{
+    totalScanned: number;
+    anomaliesFound: number;
+    newAlertsCreated: number;
+  } | null>(null);
+  const [showScanModal, setShowScanModal] = useState(false);
+  const [hasScannedOnce, setHasScannedOnce] = useState(false);
 
   useEffect(() => {
-    const fetchAnomalies = async () => {
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      setAnomalies(mockAnomalies);
-      setIsLoading(false);
-    };
+    // Only fetch existing anomalies on mount, don't auto-scan
     fetchAnomalies();
   }, []);
 
+  const fetchAnomalies = async () => {
+    try {
+      setIsLoading(true);
+      const token = localStorage.getItem('authToken');
+      const response = await fetch(`${API_BASE_URL}/government/anomalies`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      
+      const data = await response.json();
+      
+      if (data.success && data.data) {
+        // Map backend data to frontend format
+        const mappedAnomalies = data.data.map((alert: any) => ({
+          id: alert._id,
+          type: mapAlertTypeToAnomalyType(alert.alertType),
+          severity: alert.severity,
+          status: alert.status,
+          workerId: alert.entityId || alert.workerId,
+          workerName: alert.workerId?.name || alert.metadata?.workerName || 'Unknown Worker',
+          employerId: alert.metadata?.employerId || 'N/A',
+          employerName: alert.metadata?.employerName || 'Unknown Source',
+          amount: alert.evidence?.actualValue || alert.metadata?.amount || 0,
+          detectedAt: alert.detectedAt || alert.createdAt,
+          description: alert.description || alert.title,
+          confidence: alert.confidence || 0,
+          details: {
+            pattern: alert.metadata?.pattern || alert.description || 'Pattern analysis in progress',
+            expectedRange: alert.evidence?.expectedValue ? `₹${alert.evidence.expectedValue}` : undefined,
+            actualValue: alert.evidence?.actualValue ? `₹${alert.evidence.actualValue}` : undefined,
+            previousValue: alert.metadata?.previousValue,
+            frequency: alert.metadata?.frequency
+          }
+        }));
+        setAnomalies(mappedAnomalies);
+      } else {
+        console.warn('No anomalies found or response format unexpected, using empty list');
+        setAnomalies([]);
+      }
+    } catch (error) {
+      console.error('Error fetching anomalies:', error);
+      // On error, show empty list instead of mock data
+      setAnomalies([]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleRefresh = async () => {
     setIsRefreshing(true);
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    await fetchAnomalies();
     setIsRefreshing(false);
   };
 
-  const handleUpdateStatus = (anomalyId: string, newStatus: Anomaly['status']) => {
-    setAnomalies(prev =>
-      prev.map(a => (a.id === anomalyId ? { ...a, status: newStatus } : a))
-    );
+  // Helper function to map backend alert types to frontend anomaly types
+  const mapAlertTypeToAnomalyType = (alertType: string): Anomaly['type'] => {
+    const mapping: Record<string, Anomaly['type']> = {
+      'duplicate_payment': 'duplicate_payment',
+      'unusual_amount': 'unusual_amount',
+      'unusual_pattern': 'frequency_anomaly',
+      'frequency_anomaly': 'frequency_anomaly',
+      'income_spike': 'income_spike',
+      'sudden_increase': 'income_spike',
+      'identity_mismatch': 'identity_mismatch',
+      'verification_failure': 'identity_mismatch'
+    };
+    return mapping[alertType] || 'unusual_amount';
+  };
+
+  const handleRunAnomalyScan = async () => {
+    setIsScanning(true);
+    setScanResult(null);
+    
+    try {
+      const token = localStorage.getItem('authToken');
+      const response = await fetch(`${API_BASE_URL}/government/run-anomaly-scan`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          limit: 100  // Scan up to 100 workers
+        })
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        // Handle response - data might be in data.data or directly in data
+        const result = data.data || data;
+        setScanResult({
+          totalScanned: result.totalScanned || 0,
+          anomaliesFound: result.anomaliesFound || 0,
+          newAlertsCreated: result.newAlertsCreated || 0
+        });
+        
+        setHasScannedOnce(true);
+        
+        // Refresh the anomaly list to show new alerts
+        await fetchAnomalies();
+      } else {
+        console.error('Scan failed:', data.message);
+        setScanResult({
+          totalScanned: 0,
+          anomaliesFound: 0,
+          newAlertsCreated: 0
+        });
+      }
+    } catch (error) {
+      console.error('Error running anomaly scan:', error);
+      setScanResult({
+        totalScanned: 0,
+        anomaliesFound: 0,
+        newAlertsCreated: 0
+      });
+    } finally {
+      setIsScanning(false);
+      setShowScanModal(true);
+    }
+  };
+
+  const handleUpdateStatus = async (anomalyId: string, newStatus: Anomaly['status'], notes?: string) => {
+    try {
+      const token = localStorage.getItem('authToken');
+      const response = await fetch(`${API_BASE_URL}/government/anomalies/${anomalyId}/resolve`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          status: newStatus,
+          resolution: notes || `Status changed to ${newStatus}`
+        })
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        // Update local state
+        setAnomalies(prev =>
+          prev.map(a => (a.id === anomalyId ? { ...a, status: newStatus } : a))
+        );
+      }
+    } catch (error) {
+      console.error('Error updating anomaly status:', error);
+    }
     setSelectedAnomaly(null);
   };
 
@@ -298,6 +330,24 @@ const AnomalyAlerts: React.FC = () => {
           <p className="text-gray-500 mt-1">AI-detected anomalies in wage transactions</p>
         </div>
         <div className="flex items-center gap-3">
+          <Button 
+            variant="primary" 
+            onClick={handleRunAnomalyScan} 
+            disabled={isScanning}
+            className="bg-purple-600 hover:bg-purple-700"
+          >
+            {isScanning ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Scanning...
+              </>
+            ) : (
+              <>
+                <Scan className="h-4 w-4 mr-2" />
+                Run AI Scan
+              </>
+            )}
+          </Button>
           <Button variant="outline" onClick={handleRefresh} disabled={isRefreshing}>
             <RefreshCw className={`h-4 w-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
             Refresh
@@ -308,6 +358,57 @@ const AnomalyAlerts: React.FC = () => {
           </Button>
         </div>
       </div>
+
+      {/* Scan Result Modal */}
+      <Modal
+        isOpen={showScanModal}
+        onClose={() => setShowScanModal(false)}
+        title="Anomaly Scan Complete"
+      >
+        <div className="p-4 space-y-4">
+          {scanResult && (
+            <>
+              <div className="grid grid-cols-3 gap-4 text-center">
+                <div className="p-4 bg-blue-50 rounded-lg">
+                  <p className="text-2xl font-bold text-blue-700">{scanResult.totalScanned}</p>
+                  <p className="text-sm text-blue-600">Workers Scanned</p>
+                </div>
+                <div className="p-4 bg-amber-50 rounded-lg">
+                  <p className="text-2xl font-bold text-amber-700">{scanResult.anomaliesFound}</p>
+                  <p className="text-sm text-amber-600">Anomalies Found</p>
+                </div>
+                <div className="p-4 bg-red-50 rounded-lg">
+                  <p className="text-2xl font-bold text-red-700">{scanResult.newAlertsCreated}</p>
+                  <p className="text-sm text-red-600">New Alerts Created</p>
+                </div>
+              </div>
+              
+              {scanResult.newAlertsCreated > 0 ? (
+                <div className="flex items-center gap-2 p-3 bg-green-50 rounded-lg text-green-700">
+                  <CheckCircle2 className="h-5 w-5" />
+                  <span>New anomaly alerts have been created and added to the list.</span>
+                </div>
+              ) : scanResult.anomaliesFound > 0 ? (
+                <div className="flex items-center gap-2 p-3 bg-blue-50 rounded-lg text-blue-700">
+                  <Eye className="h-5 w-5" />
+                  <span>Anomalies detected but alerts already exist for these workers.</span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 p-3 bg-gray-50 rounded-lg text-gray-700">
+                  <Shield className="h-5 w-5" />
+                  <span>No suspicious patterns detected. All workers appear normal.</span>
+                </div>
+              )}
+            </>
+          )}
+          
+          <div className="flex justify-end">
+            <Button onClick={() => setShowScanModal(false)}>
+              Close
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       {/* Stats */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -374,9 +475,36 @@ const AnomalyAlerts: React.FC = () => {
       <div className="space-y-4">
         {filteredAnomalies.length === 0 ? (
           <Card>
-            <CardContent className="p-8 text-center">
-              <Shield className="h-12 w-12 text-gray-300 mx-auto mb-4" />
-              <p className="text-gray-500">No anomalies found matching your criteria</p>
+            <CardContent className="p-12 text-center">
+              <Shield className="h-16 w-16 text-gray-300 mx-auto mb-4" />
+              {anomalies.length === 0 ? (
+                <>
+                  <h3 className="text-lg font-semibold text-gray-700 mb-2">No Anomalies Detected Yet</h3>
+                  <p className="text-gray-500 mb-6">
+                    Click the "Run AI Scan" button to analyze worker transactions and detect any anomalies using our AI model.
+                  </p>
+                  <Button 
+                    variant="primary" 
+                    onClick={handleRunAnomalyScan} 
+                    disabled={isScanning}
+                    className="bg-purple-600 hover:bg-purple-700"
+                  >
+                    {isScanning ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Scanning...
+                      </>
+                    ) : (
+                      <>
+                        <Scan className="h-4 w-4 mr-2" />
+                        Run AI Scan Now
+                      </>
+                    )}
+                  </Button>
+                </>
+              ) : (
+                <p className="text-gray-500">No anomalies found matching your criteria</p>
+              )}
             </CardContent>
           </Card>
         ) : (

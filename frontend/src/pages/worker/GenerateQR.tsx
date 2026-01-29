@@ -41,12 +41,18 @@ export default function GenerateQRPage() {
 
     setLoading(true);
     try {
-      const response = await api.post('/workers/qr/generate', {
+      // API interceptor returns response.data directly, which contains { success, message, data }
+      const result: any = await api.post('/workers/qr/generate', {
         accountId: selectedAccountId
       });
 
-      setQrData(response.data);
-      setQrToken(response.data.token);
+      console.log('QR generation result:', result);
+      
+      // The actual data is inside result.data (from successResponse wrapper)
+      const responseData = result.data || result;
+      
+      setQrData(responseData);
+      setQrToken(responseData.token);
       toast.success('QR code generated successfully!');
     } catch (error: any) {
       console.error('Error generating QR:', error);

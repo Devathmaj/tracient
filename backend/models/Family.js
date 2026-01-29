@@ -363,6 +363,27 @@ const familySchema = new mongoose.Schema({
   last_auto_update: {
     type: Date,
     default: null
+  },
+  
+  // Policy screening results
+  policy_overrides_applied: [{
+    policyId: String,
+    policyName: String,
+    action: String,
+    originalClassification: String,
+    ignoredCriteria: [String]
+  }],
+  last_policy_screening: {
+    type: Date,
+    default: null
+  },
+  requires_manual_review: {
+    type: Boolean,
+    default: false
+  },
+  review_reason: {
+    type: String,
+    default: ''
   }
 }, {
   timestamps: true,

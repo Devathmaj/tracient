@@ -10,7 +10,8 @@ import {
   History,
   ShieldCheck,
   ShieldX,
-  CheckCircle
+  CheckCircle,
+  XCircle
 } from 'lucide-react';
 import { 
   Card, 
@@ -66,16 +67,25 @@ interface ClassificationHistory {
   currentYear: number;
 }
 
+interface History {
+  availableYears: number[];
+  history: ClassificationData[];
+}
+
 const BPLStatus: React.FC = () => {
   const [classification, setClassification] = useState<ClassificationData | null>(null);
   const [familyClassification, setFamilyClassification] = useState<any>(null);
+  const [family, setFamily] = useState<any>(null);
   const [history, setHistory] = useState<ClassificationHistory | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isAttempting, setIsAttempting] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [attemptsRemaining, setAttemptsRemaining] = useState<number>(6);
   const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [classificationMessage, setClassificationMessage] = useState<string | null>(null);
+  const [classificationError, setClassificationError] = useState<string | null>(null);
 
   useEffect(() => {
     fetchData();
@@ -107,9 +117,12 @@ const BPLStatus: React.FC = () => {
       // Try to fetch from Family model as fallback
       try {
         const familyData = await familyService.getMyFamily();
-        if (familyData.family && familyData.family.classification && familyData.family.classification !== 'pending') {
-          setFamilyClassification(familyData.family);
-          hasData = true;
+        if (familyData.family) {
+          setFamily(familyData.family);
+          if (familyData.family.classification && familyData.family.classification !== 'pending') {
+            setFamilyClassification(familyData.family);
+            hasData = true;
+          }
         }
       } catch (e) {
         console.log('No family classification');
@@ -136,6 +149,12 @@ const BPLStatus: React.FC = () => {
         console.log('Could not fetch attempts remaining');
       }
       
+      // Set mock data for visualization if we have family but no specific classification data
+      if (family && !hasData) {
+        // Could use mock data here if available for visualization
+        // setData(mockBPLData);
+      }
+      
       // Only show error if we have absolutely no data
       if (!hasData) {
         setError('No classification data found. Click "Attempt Classification" to get started.');
@@ -143,6 +162,10 @@ const BPLStatus: React.FC = () => {
     } catch (error: any) {
       console.error('Error fetching classification data:', error);
       setError('Failed to load classification data. Please try again.');
+      // Fall back to mock data if available
+      // if (typeof mockBPLData !== 'undefined') {
+      //   setData(mockBPLData);
+      // }
     } finally {
       setIsLoading(false);
     }
@@ -156,6 +179,43 @@ const BPLStatus: React.FC = () => {
       }
     } catch (error) {
       console.error('Failed to fetch history for year:', year);
+    }
+  };
+
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    setClassificationMessage(null);
+    setClassificationError(null);
+    
+    try {
+      // Call the AI model to reclassify the family
+      const result = await familyService.reclassifyFamily();
+      
+      if (result && result.success) {
+        // Refresh family data after reclassification
+        const familyData = await familyService.getMyFamily();
+        setFamily(familyData.family);
+        
+        setClassificationMessage('Family has been reclassified successfully.');
+        
+        if (familyData.family && familyData.family.classification) {
+          const classification = familyData.family.classification;
+          const confidence = familyData.family.classification_confidence || 0;
+          const reason = familyData.family.classification_reason || '';
+          
+          setClassificationMessage(
+            `Classification updated: ${classification} (${confidence}% confidence). ${reason}`
+          );
+        }
+      }
+      
+      // Also refresh other data
+      await fetchData();
+    } catch (error: any) {
+      console.error('Error reclassifying family:', error);
+      setClassificationError(error.message || 'Failed to refresh classification. Please try again.');
+    } finally {
+      setIsRefreshing(false);
     }
   };
 
@@ -197,7 +257,7 @@ const BPLStatus: React.FC = () => {
     );
   }
 
-  const isBPL = classification?.classification === 'BPL';
+  const isBPL = classification?.classification === 'BPL' || family?.classification === 'BPL';
   const pieChartData = classification?.incomeBreakdown?.map(item => ({
     name: item.source,
     value: item.amount,
@@ -217,7 +277,11 @@ const BPLStatus: React.FC = () => {
         <div className="flex items-center gap-3">
           <Button variant="outline" onClick={fetchData} disabled={isLoading}>
             <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
-            Refresh
+            Refresh Data
+          </Button>
+          <Button variant="outline" onClick={handleRefresh} disabled={isRefreshing}>
+            <RefreshCw className={`h-4 w-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
+            {isRefreshing ? 'Classifying...' : 'AI Reclassify'}
           </Button>
         </div>
       </div>
@@ -238,6 +302,21 @@ const BPLStatus: React.FC = () => {
             <CheckCircle className="h-4 w-4" />
             {successMessage}
           </div>
+        </Alert>
+      )}
+
+      {/* Classification Success/Error Messages */}
+      {classificationMessage && (
+        <Alert variant="success" onClose={() => setClassificationMessage(null)}>
+          <CheckCircle className="h-4 w-4" />
+          <span>{classificationMessage}</span>
+        </Alert>
+      )}
+      
+      {classificationError && (
+        <Alert variant="error" onClose={() => setClassificationError(null)}>
+          <XCircle className="h-4 w-4" />
+          <span>{classificationError}</span>
         </Alert>
       )}
 
@@ -342,6 +421,39 @@ const BPLStatus: React.FC = () => {
                 </div>
               </div>
             )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* AI-Based Classification Status Card from Family Data */}
+      {!classification && family && family.classification && family.classification !== 'pending' && (
+        <Card className={`border-2 ${family.classification === 'BPL' ? 'border-orange-300 bg-orange-50' : 'border-green-300 bg-green-50'}`}>
+          <CardContent className="py-6">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+              <div className="flex items-center gap-4">
+                <div className={`p-4 rounded-full ${family.classification === 'BPL' ? 'bg-orange-200' : 'bg-green-200'}`}>
+                  <Shield className={`h-8 w-8 ${family.classification === 'BPL' ? 'text-orange-700' : 'text-green-700'}`} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h2 className={`text-2xl font-bold ${family.classification === 'BPL' ? 'text-orange-800' : 'text-green-800'}`}>
+                      {family.classification === 'BPL' ? 'Below Poverty Line' : 'Above Poverty Line'}
+                    </h2>
+                    <Badge variant={family.classification === 'BPL' ? 'warning' : 'success'}>
+                      {family.classification}
+                    </Badge>
+                  </div>
+                  <p className="text-sm text-gray-600 mt-1">
+                    {family.classification_reason || 'Classification from AI model'}
+                  </p>
+                  {family.classification_confidence > 0 && (
+                    <p className="text-sm text-gray-500">
+                      AI Confidence: {family.classification_confidence}%
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
           </CardContent>
         </Card>
       )}
