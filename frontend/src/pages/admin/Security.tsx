@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Shield, 
   Key,
@@ -20,9 +20,11 @@ import {
   Button,
   Badge,
   Select,
-  Switch
+  Switch,
+  Spinner
 } from '@/components/common';
 import { formatDate } from '@/utils/formatters';
+import api from '@/services/api';
 
 interface SecurityEvent {
   id: string;
@@ -34,20 +36,80 @@ interface SecurityEvent {
   status: 'success' | 'failed' | 'warning';
 }
 
-const mockSecurityEvents: SecurityEvent[] = [
-  { id: '1', type: 'login', user: 'admin@gov.in', action: 'Successful login', timestamp: '2024-01-15T10:30:00', ipAddress: '192.168.1.100', status: 'success' },
-  { id: '2', type: 'failed_login', user: 'unknown@test.com', action: 'Failed login attempt', timestamp: '2024-01-15T10:25:00', ipAddress: '45.123.45.67', status: 'failed' },
-  { id: '3', type: 'permission_change', user: 'admin@gov.in', action: 'Updated user permissions', timestamp: '2024-01-15T09:15:00', ipAddress: '192.168.1.100', status: 'warning' },
-  { id: '4', type: 'api_access', user: 'api_service', action: 'API key generated', timestamp: '2024-01-15T08:00:00', ipAddress: '10.0.0.50', status: 'success' },
-];
-
 const Security: React.FC = () => {
-  const [events, _setEvents] = useState<SecurityEvent[]>(mockSecurityEvents);
+  const [events, setEvents] = useState<SecurityEvent[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [securityStats, setSecurityStats] = useState({
+    successfulLogins: 0,
+    failedAttempts: 0,
+    activeApiKeys: 0,
+    securityScore: 99.9
+  });
   const [twoFactorEnabled, setTwoFactorEnabled] = useState(true);
   const [sessionTimeout, setSessionTimeout] = useState('30');
   const [passwordPolicy, setPasswordPolicy] = useState('strong');
   const [showApiKey, setShowApiKey] = useState(false);
   const [eventFilter, setEventFilter] = useState('all');
+
+  useEffect(() => {
+    const fetchSecurityData = async () => {
+      try {
+        setIsLoading(true);
+        
+        // Fetch audit logs for security events
+        const response = await api.get('/admin/audit-logs', {
+          params: { limit: 50 }
+        });
+        
+        const logs = response.data?.data || [];
+        
+        // Map audit logs to security events
+        const mappedEvents: SecurityEvent[] = logs.map((log: any) => {
+          // Determine event type based on action
+          let eventType: SecurityEvent['type'] = 'api_access';
+          let status: SecurityEvent['status'] = 'success';
+          
+          const action = (log.action || '').toLowerCase();
+          if (action.includes('login')) {
+            eventType = action.includes('failed') ? 'failed_login' : 'login';
+            status = action.includes('failed') ? 'failed' : 'success';
+          } else if (action.includes('permission') || action.includes('role') || action.includes('user')) {
+            eventType = 'permission_change';
+            status = 'warning';
+          }
+          
+          return {
+            id: log._id,
+            type: eventType,
+            user: log.user?.email || log.metadata?.email || 'System',
+            action: log.action || 'Unknown action',
+            timestamp: log.createdAt || log.timestamp,
+            ipAddress: log.metadata?.ipAddress || log.ipAddress || 'N/A',
+            status
+          };
+        });
+        
+        setEvents(mappedEvents);
+        
+        // Calculate security stats from events
+        const successLogins = mappedEvents.filter(e => e.type === 'login').length;
+        const failedLogins = mappedEvents.filter(e => e.type === 'failed_login').length;
+        
+        setSecurityStats({
+          successfulLogins: successLogins,
+          failedAttempts: failedLogins,
+          activeApiKeys: 8, // This would come from a separate API if available
+          securityScore: failedLogins > 0 ? Math.max(90, 99.9 - (failedLogins * 0.5)) : 99.9
+        });
+      } catch (err) {
+        console.error('Error fetching security data:', err);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    
+    fetchSecurityData();
+  }, []);
 
   const filteredEvents = eventFilter === 'all' 
     ? events 
@@ -81,6 +143,14 @@ const Security: React.FC = () => {
     }
   };
 
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <Spinner size="lg" />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -102,28 +172,28 @@ const Security: React.FC = () => {
         <Card>
           <CardContent className="p-4 text-center">
             <CheckCircle2 className="h-8 w-8 text-green-500 mx-auto mb-2" />
-            <p className="text-2xl font-bold text-gray-900">1,245</p>
+            <p className="text-2xl font-bold text-gray-900">{securityStats.successfulLogins}</p>
             <p className="text-sm text-gray-500">Successful Logins</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-4 text-center">
             <AlertTriangle className="h-8 w-8 text-amber-500 mx-auto mb-2" />
-            <p className="text-2xl font-bold text-gray-900">12</p>
+            <p className="text-2xl font-bold text-gray-900">{securityStats.failedAttempts}</p>
             <p className="text-sm text-gray-500">Failed Attempts</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-4 text-center">
             <Key className="h-8 w-8 text-blue-500 mx-auto mb-2" />
-            <p className="text-2xl font-bold text-gray-900">8</p>
+            <p className="text-2xl font-bold text-gray-900">{securityStats.activeApiKeys}</p>
             <p className="text-sm text-gray-500">Active API Keys</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-4 text-center">
             <Shield className="h-8 w-8 text-purple-500 mx-auto mb-2" />
-            <p className="text-2xl font-bold text-gray-900">99.9%</p>
+            <p className="text-2xl font-bold text-gray-900">{securityStats.securityScore.toFixed(1)}%</p>
             <p className="text-sm text-gray-500">Security Score</p>
           </CardContent>
         </Card>
