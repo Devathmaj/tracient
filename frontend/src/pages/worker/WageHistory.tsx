@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  Search, 
-  Filter, 
-  Download, 
+  Search,
+  Filter,
+  Download,
   Calendar,
   Building2,
   IndianRupee,
@@ -34,30 +34,47 @@ import type { Column } from '@/components/common/Table';
 
 interface WageRecord {
   id: string;
-  employer: string;
-  employerName: string;
-  employerId: string;
-  companyName: string;
   amount: number;
   date: string;
-  status: 'verified' | 'pending' | 'disputed' | 'completed';
-  paymentMethod: string;
-  workType: string;
-  hours?: number;
-  transactionHash: string;
-  blockNumber: number;
-  incomeSource: string;
-  isVerified: boolean;
   source: string;
-  description?: string;
-  verifiedOnChain: boolean;
+  employerName: string;
+  companyName: string;
+  status: string;
+  verified: boolean;
+  paymentMethod: string;
+  description: string;
 }
 
-// Mock data removed - now fetching from API
+interface DashboardData {
+  totalEarnings: number;
+  monthlyAverage: number;
+  lastPayment: {
+    amount: number;
+    date: string;
+    source: string;
+  } | null;
+  monthlyIncome: Array<{ month: string; amount: number }>;
+  incomeBySource: Array<{ source: string; amount: number; percentage: number }>;
+  recentWages: Array<{
+    id: string;
+    amount: number;
+    date: string;
+    source: string;
+    status: string;
+    verified: boolean;
+    paymentMethod: string;
+  }>;
+  verificationBreakdown: {
+    verified: number;
+    unverified: number;
+    verifiedPercentage: number;
+  };
+}
 
 const WageHistory: React.FC = () => {
   const [records, setRecords] = useState<WageRecord[]>([]);
   const [monthlyData, setMonthlyData] = useState<Array<{ month: string; amount: number }>>([]);
+  const [dashboardStats, setDashboardStats] = useState<DashboardData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -70,48 +87,105 @@ const WageHistory: React.FC = () => {
     const fetchRecords = async () => {
       try {
         setIsLoading(true);
-        // Fetch transactions from API
-        const response = await get<{ success: boolean; data: { transactions: any[]; summary: any } }>('/workers/profile/transactions');
-        if (response.success && response.data?.transactions) {
-          // Map API response to WageRecord format
-          const mappedRecords: WageRecord[] = response.data.transactions.map((t) => ({
-            id: t.id || t._id,
-            employer: t.incomeSource || t.employerDetails?.companyName || 'Unknown Source',
-            employerName: t.employerDetails?.name || t.paidByName || '',
-            employerId: t.employerId || '',
-            companyName: t.employerDetails?.companyName || t.incomeSource || '',
-            amount: t.amount || 0,
-            date: t.date || t.createdAt,
-            status: t.isVerified ? 'verified' as const : 'pending' as const,
-            paymentMethod: t.paymentMethod || 'Cash',
-            workType: t.workType || t.description || 'General Labor',
-            transactionHash: t.blockchainTxId || '',
-            blockNumber: t.blockNumber || 0,
-            incomeSource: t.incomeSource || 'Self Declared',
-            isVerified: t.isVerified || false,
-            source: t.source || 'self_declared',
-            description: t.description || '',
-            verifiedOnChain: t.verifiedOnChain || !!t.blockchainTxId
-          }));
-          setRecords(mappedRecords);
+        
+        // First fetch dashboard data to get summary stats and monthly chart
+        const dashboardResponse = await get<{ success: boolean; data: DashboardData }>('/workers/profile/dashboard');
+        
+        if (dashboardResponse.success && dashboardResponse.data) {
+          setDashboardStats(dashboardResponse.data);
+          setMonthlyData(dashboardResponse.data.monthlyIncome || []);
           
-          // Calculate monthly data from transactions
-          const monthlyMap: Record<string, number> = {};
-          const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-          mappedRecords.forEach((r) => {
-            const d = new Date(r.date);
-            const monthKey = months[d.getMonth()];
-            monthlyMap[monthKey] = (monthlyMap[monthKey] || 0) + r.amount;
-          });
+          // Use recentWages from dashboard as base - this is guaranteed to work
+          // because dashboard is already showing data
+          const dashboardWages = dashboardResponse.data.recentWages || [];
           
-          const monthlyArr = months.map(m => ({ month: m, amount: monthlyMap[m] || 0 })).filter(m => m.amount > 0);
-          setMonthlyData(monthlyArr.length > 0 ? monthlyArr : [{ month: 'No Data', amount: 0 }]);
+          // Try to get full history from wages endpoint with pagination
+          try {
+            let allWages: WageRecord[] = [];
+            let page = 1;
+            let hasMore = true;
+            
+            while (hasMore) {
+              const wageResponse = await get<{ success: boolean; data: any[]; pagination?: any; hasNextPage?: boolean; totalPages?: number }>(`/wages?page=${page}&limit=100`);
+              
+              console.log(`Wage response page ${page}:`, wageResponse);
+              
+              if (wageResponse.success && wageResponse.data && Array.isArray(wageResponse.data) && wageResponse.data.length > 0) {
+                // Map the raw wage records to our format
+                const pageWages: WageRecord[] = wageResponse.data.map((w: any) => ({
+                  id: w._id || w.id,
+                  amount: w.amount || 0,
+                  date: w.createdAt || w.date,
+                  source: w.employerId?.companyName || w.incomeSource || 'Self Declared',
+                  employerName: w.employerId?.name || '',
+                  companyName: w.employerId?.companyName || w.incomeSource || 'Self Declared',
+                  status: w.status || 'completed',
+                  verified: Boolean(w.isVerified || w.employerId || w.verifiedOnChain),
+                  paymentMethod: w.paymentMethod || 'cash',
+                  description: w.description || w.workType || 'Wage Payment'
+                }));
+                
+                allWages = [...allWages, ...pageWages];
+                
+                // Check if there are more pages
+                hasMore = (wageResponse.pagination?.hasNextPage) || 
+                         (wageResponse.hasNextPage) || 
+                         (pageWages.length === 100);
+                page++;
+                
+                // Safety check to prevent infinite loops
+                if (page > 100) break;
+              } else {
+                hasMore = false;
+              }
+            }
+            
+            console.log(`Total wages fetched: ${allWages.length}`);
+            
+            if (allWages.length > 0) {
+              setRecords(allWages);
+            } else {
+              // Fallback: convert dashboard recentWages to full format
+              const convertedWages: WageRecord[] = dashboardWages.map(w => ({
+                id: w.id,
+                amount: w.amount,
+                date: w.date,
+                source: w.source,
+                employerName: '',
+                companyName: w.source,
+                status: w.status,
+                verified: w.verified,
+                paymentMethod: w.paymentMethod,
+                description: 'Wage Payment'
+              }));
+              setRecords(convertedWages);
+            }
+          } catch (wageError) {
+            console.error('Failed to fetch full wage history:', wageError);
+            console.log('Falling back to dashboard wages');
+            // Use dashboard wages as fallback
+            const convertedWages: WageRecord[] = dashboardWages.map(w => ({
+              id: w.id,
+              amount: w.amount,
+              date: w.date,
+              source: w.source,
+              employerName: '',
+              companyName: w.source,
+              status: w.status,
+              verified: w.verified,
+              paymentMethod: w.paymentMethod,
+              description: 'Wage Payment'
+            }));
+            setRecords(convertedWages);
+          }
+        } else {
+          setRecords([]);
+          setMonthlyData([]);
         }
       } catch (error) {
         console.error('Failed to fetch wage records:', error);
-        // Fallback to empty
         setRecords([]);
-        setMonthlyData([{ month: 'No Data', amount: 0 }]);
+        setMonthlyData([]);
       } finally {
         setIsLoading(false);
       }
@@ -120,10 +194,17 @@ const WageHistory: React.FC = () => {
   }, []);
 
   const filteredRecords = records.filter(record => {
-    const matchesSearch = (record.employer || record.incomeSource || record.companyName || '').toLowerCase().includes(searchQuery.toLowerCase());
+    const searchFields = [
+      record.source,
+      record.paymentMethod,
+      record.status
+    ].filter(Boolean).join(' ').toLowerCase();
+    
+    const matchesSearch = searchFields.includes(searchQuery.toLowerCase());
     const matchesStatus = statusFilter === 'all' || 
-      (statusFilter === 'verified' && record.isVerified) ||
-      (statusFilter === 'unverified' && !record.isVerified);
+      (statusFilter === 'verified' && record.verified) ||
+      (statusFilter === 'pending' && record.status === 'pending') ||
+      (statusFilter === 'unverified' && !record.verified);
     
     // Date range filter
     let matchesDate = true;
@@ -132,16 +213,16 @@ const WageHistory: React.FC = () => {
       const now = new Date();
       switch (dateRange) {
         case '7d':
-          matchesDate = recordDate >= new Date(now.setDate(now.getDate() - 7));
+          matchesDate = recordDate >= new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
           break;
         case '30d':
-          matchesDate = recordDate >= new Date(now.setDate(now.getDate() - 30));
+          matchesDate = recordDate >= new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
           break;
         case '90d':
-          matchesDate = recordDate >= new Date(now.setDate(now.getDate() - 90));
+          matchesDate = recordDate >= new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
           break;
         case '1y':
-          matchesDate = recordDate >= new Date(now.setFullYear(now.getFullYear() - 1));
+          matchesDate = recordDate >= new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
           break;
       }
     }
@@ -150,23 +231,29 @@ const WageHistory: React.FC = () => {
     const matchesPaymentMethod = paymentMethodFilter === 'all' || 
       record.paymentMethod.toLowerCase() === paymentMethodFilter.toLowerCase();
     
-    // Source filter (employer vs self-declared)
+    // Source filter (verified vs unverified)
     const matchesSource = sourceFilter === 'all' ||
-      (sourceFilter === 'employer' && record.source === 'employer') ||
-      (sourceFilter === 'self_declared' && record.source !== 'employer');
+      (sourceFilter === 'employer' && record.verified) ||
+      (sourceFilter === 'self_declared' && !record.verified);
     
     return matchesSearch && matchesStatus && matchesDate && matchesPaymentMethod && matchesSource;
   });
 
-  const totalEarnings = filteredRecords.reduce((sum, r) => sum + r.amount, 0);
-  const verifiedCount = filteredRecords.filter(r => r.isVerified).length;
-  const unverifiedCount = filteredRecords.filter(r => !r.isVerified).length;
-  const verifiedAmount = filteredRecords.filter(r => r.isVerified).reduce((sum, r) => sum + r.amount, 0);
+  // Calculate stats from filtered records, or use dashboard stats as fallback
+  const totalEarnings = filteredRecords.length > 0 
+    ? filteredRecords.reduce((sum, r) => sum + r.amount, 0)
+    : (dashboardStats?.totalEarnings || 0);
+  const verifiedCount = filteredRecords.filter(r => r.verified).length;
+  const unverifiedCount = filteredRecords.filter(r => !r.verified).length;
+  const verifiedAmount = filteredRecords.length > 0
+    ? filteredRecords.filter(r => r.verified).reduce((sum, r) => sum + r.amount, 0)
+    : (dashboardStats?.verificationBreakdown?.verified || 0);
 
   const statusOptions = [
     { value: 'all', label: 'All Status' },
-    { value: 'verified', label: 'Verified Only' },
-    { value: 'unverified', label: 'Unverified Only' },
+    { value: 'verified', label: 'Verified' },
+    { value: 'unverified', label: 'Unverified' },
+    { value: 'pending', label: 'Pending' },
   ];
 
   const dateRangeOptions = [
@@ -200,43 +287,40 @@ const WageHistory: React.FC = () => {
         <div className="flex items-center gap-2">
           <Calendar className="h-4 w-4 text-gray-400" />
           <div>
-            <span className="block">{formatDate(record.date)}</span>
+            <span className="block font-medium">{formatDate(record.date)}</span>
+            <span className="text-xs text-gray-400">{record.status}</span>
           </div>
         </div>
       ),
     },
     {
-      key: 'employer',
-      header: 'Organization / Source',
+      key: 'source',
+      header: 'Employer / Source',
       sortable: true,
       render: (record) => (
         <div className="flex items-center gap-2">
-          {record.source === 'employer' || record.employerId ? (
+          {record.verified ? (
             <Building2 className="h-4 w-4 text-blue-500" />
           ) : (
             <User className="h-4 w-4 text-gray-400" />
           )}
           <div>
-            <p className="font-medium text-gray-900">{record.companyName || record.incomeSource || record.employer}</p>
-            {record.employerName && (
-              <p className="text-xs text-blue-600">Paid by: {record.employerName}</p>
-            )}
-            <p className="text-xs text-gray-500">
-              {record.source === 'employer' || record.employerId ? '✓ Employer Payment' : '○ Self Declared'}
+            <p className="font-medium text-gray-900">{record.companyName || record.source}</p>
+            <p className="text-xs text-gray-500">{record.description}</p>
+            <p className="text-xs text-gray-400">
+              {record.verified ? '✓ Employer Verified' : '○ Self Declared'}
             </p>
           </div>
         </div>
       ),
     },
     {
-      key: 'workType',
-      header: 'Work Type',
+      key: 'paymentMethod',
+      header: 'Payment Method',
       render: (record) => (
         <div>
-          <p className="text-gray-600">{record.workType}</p>
-          {record.description && record.description !== record.workType && (
-            <p className="text-xs text-gray-400">{record.description}</p>
-          )}
+          <p className="text-gray-600 capitalize">{record.paymentMethod?.replace('_', ' ')}</p>
+          <p className="text-xs text-gray-400">{record.status}</p>
         </div>
       ),
     },
@@ -252,25 +336,11 @@ const WageHistory: React.FC = () => {
       ),
     },
     {
-      key: 'paymentMethod',
-      header: 'Payment Method',
-      render: (record) => (
-        <div className="flex items-center gap-1">
-          <span className="text-gray-600 capitalize">{record.paymentMethod?.replace('_', ' ')}</span>
-          {record.verifiedOnChain && (
-            <span title="Verified on Blockchain">
-              <CheckCircle className="h-3 w-3 text-green-500" />
-            </span>
-          )}
-        </div>
-      ),
-    },
-    {
-      key: 'isVerified',
-      header: 'Status',
+      key: 'verified',
+      header: 'Verification',
       render: (record) => (
         <div className="flex items-center gap-2">
-          {record.isVerified ? (
+          {record.verified ? (
             <Badge variant="success" className="flex items-center gap-1 w-fit">
               <ShieldCheck className="h-3 w-3" />
               Verified
@@ -519,15 +589,15 @@ const WageHistory: React.FC = () => {
           <div className="space-y-6">
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <p className="text-sm text-gray-500">Income Source</p>
-                <p className="font-medium text-gray-900">{selectedRecord.incomeSource || selectedRecord.employer}</p>
-                <p className="text-xs text-gray-500">
-                  {selectedRecord.source === 'employer' || selectedRecord.employerId ? 'Employer Payment' : 'Self Declared'}
-                </p>
+                <p className="text-sm text-gray-500">Company / Employer</p>
+                <p className="font-medium text-gray-900">{selectedRecord.companyName || selectedRecord.source}</p>
+                {selectedRecord.employerName && (
+                  <p className="text-xs text-blue-600">Contact: {selectedRecord.employerName}</p>
+                )}
               </div>
               <div>
                 <p className="text-sm text-gray-500">Amount</p>
-                <p className="font-medium text-gray-900">{formatCurrency(selectedRecord.amount)}</p>
+                <p className="text-xl font-bold text-green-600">{formatCurrency(selectedRecord.amount)}</p>
               </div>
               <div>
                 <p className="text-sm text-gray-500">Date & Time</p>
@@ -535,60 +605,58 @@ const WageHistory: React.FC = () => {
               </div>
               <div>
                 <p className="text-sm text-gray-500">Payment Method</p>
-                <p className="font-medium text-gray-900">{selectedRecord.paymentMethod}</p>
+                <p className="font-medium text-gray-900 capitalize">{selectedRecord.paymentMethod?.replace('_', ' ')}</p>
               </div>
               <div>
-                <p className="text-sm text-gray-500">Work Type</p>
-                <p className="font-medium text-gray-900">{selectedRecord.workType}</p>
+                <p className="text-sm text-gray-500">Work Description</p>
+                <p className="font-medium text-gray-900">{selectedRecord.description}</p>
               </div>
               <div>
+                <p className="text-sm text-gray-500">Transaction Status</p>
+                <Badge variant={selectedRecord.status === 'completed' ? 'success' : 'warning'} className="w-fit">
+                  {selectedRecord.status}
+                </Badge>
+              </div>
+              <div className="col-span-2">
                 <p className="text-sm text-gray-500">Verification Status</p>
-                {selectedRecord.isVerified ? (
-                  <Badge variant="success" className="flex items-center gap-1 w-fit">
-                    <ShieldCheck className="h-3 w-3" />
-                    Verified
-                  </Badge>
+                {selectedRecord.verified ? (
+                  <div className="flex items-center gap-2 mt-1">
+                    <Badge variant="success" className="flex items-center gap-1 w-fit">
+                      <ShieldCheck className="h-3 w-3" />
+                      Employer Verified
+                    </Badge>
+                    <span className="text-xs text-green-600">This income is verified by the employer and counts towards welfare calculations.</span>
+                  </div>
                 ) : (
-                  <Badge variant="warning" className="flex items-center gap-1 w-fit">
-                    <ShieldX className="h-3 w-3" />
-                    Unverified
-                  </Badge>
+                  <div className="flex items-center gap-2 mt-1">
+                    <Badge variant="warning" className="flex items-center gap-1 w-fit">
+                      <ShieldX className="h-3 w-3" />
+                      Self Declared
+                    </Badge>
+                    <span className="text-xs text-orange-600">This income is self-declared and not employer-verified.</span>
+                  </div>
                 )}
               </div>
             </div>
 
             {/* Verification Info */}
-            <div className={`p-4 rounded-lg ${selectedRecord.isVerified ? 'bg-green-50 border border-green-200' : 'bg-orange-50 border border-orange-200'}`}>
+            <div className={`p-4 rounded-lg ${selectedRecord.verified ? 'bg-green-50 border border-green-200' : 'bg-yellow-50 border border-yellow-200'}`}>
               <div className="flex items-start gap-3">
-                {selectedRecord.isVerified ? (
+                {selectedRecord.verified ? (
                   <ShieldCheck className="h-5 w-5 text-green-600 mt-0.5" />
                 ) : (
-                  <ShieldX className="h-5 w-5 text-orange-600 mt-0.5" />
+                  <ShieldX className="h-5 w-5 text-yellow-600 mt-0.5" />
                 )}
                 <div>
-                  <p className={`font-medium ${selectedRecord.isVerified ? 'text-green-800' : 'text-orange-800'}`}>
-                    {selectedRecord.isVerified ? 'Income Verified' : 'Income Not Verified'}
+                  <p className={`font-medium ${selectedRecord.verified ? 'text-green-800' : 'text-yellow-800'}`}>
+                    {selectedRecord.verified ? 'Payment Verified' : 'Payment Unverified'}
                   </p>
-                  <p className={`text-sm mt-1 ${selectedRecord.isVerified ? 'text-green-700' : 'text-orange-700'}`}>
-                    {selectedRecord.isVerified 
-                      ? 'This income was paid directly by an employer and is verified on the system.'
-                      : 'This income is self-declared and not verified by an employer. Self-declared income may receive lower weightage in welfare calculations.'
+                  <p className={`text-sm mt-1 ${selectedRecord.verified ? 'text-green-700' : 'text-yellow-700'}`}>
+                    {selectedRecord.verified ? 
+                      'This payment has been verified by the employer or system.' :
+                      'This payment is self-declared and has not been verified by an employer.'
                     }
                   </p>
-                </div>
-              </div>
-            </div>
-
-            <div className="border-t pt-4">
-              <h4 className="font-medium text-gray-900 mb-3">Blockchain Details</h4>
-              <div className="space-y-2 bg-gray-50 p-4 rounded-lg">
-                <div>
-                  <p className="text-xs text-gray-500">Transaction Hash</p>
-                  <p className="text-sm font-mono text-gray-700 break-all">{selectedRecord.transactionHash || 'Not recorded on blockchain'}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-500">Block Number</p>
-                  <p className="text-sm font-mono text-gray-700">{selectedRecord.blockNumber || 'N/A'}</p>
                 </div>
               </div>
             </div>
