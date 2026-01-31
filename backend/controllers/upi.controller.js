@@ -203,7 +203,9 @@ export const processUPIPayment = async (req, res) => {
       transactionType: TRANSACTION_TYPES.WAGE,
       upiTransactionId: upiTransaction._id,
       status: PAYMENT_STATUS.PENDING,
-      source: qrToken ? 'qr_scan' : 'manual'
+      source: qrToken ? 'qr_scan' : 'manual',
+      incomeSource: senderName || 'UPI Payment',
+      isVerified: false
     });
     
     // Simulate payment processing (in production, integrate with UPI gateway)

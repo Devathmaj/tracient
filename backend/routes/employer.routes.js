@@ -170,6 +170,408 @@ router.get(
 );
 
 /**
+ * @route GET /api/employers/profile/dashboard
+ * @desc Get comprehensive employer dashboard data
+ * @access Private (Employer)
+ */
+router.get(
+  '/profile/dashboard',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const employer = await Employer.findOne({ userId: req.user.id });
+    
+    if (!employer) {
+      return notFoundResponse(res, 'Employer profile not found');
+    }
+
+    const now = new Date();
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+    
+    // Get all completed wage records for this employer
+    const allWageRecords = await WageRecord.find({
+      employerId: employer._id,
+      status: 'completed'
+    }).populate('workerId', 'name phone idHash').sort({ createdAt: -1 });
+
+    // Calculate stats
+    const totalPayments = allWageRecords.reduce((sum, w) => sum + w.amount, 0);
+    
+    // Current month payments
+    const currentMonthRecords = allWageRecords.filter(w => {
+      const d = new Date(w.createdAt);
+      return d.getMonth() === currentMonth && d.getFullYear() === currentYear;
+    });
+    const currentMonthPayroll = currentMonthRecords.reduce((sum, w) => sum + w.amount, 0);
+    
+    // Previous month for trend calculation
+    const prevMonth = currentMonth === 0 ? 11 : currentMonth - 1;
+    const prevYear = currentMonth === 0 ? currentYear - 1 : currentYear;
+    const prevMonthRecords = allWageRecords.filter(w => {
+      const d = new Date(w.createdAt);
+      return d.getMonth() === prevMonth && d.getFullYear() === prevYear;
+    });
+    const prevMonthPayroll = prevMonthRecords.reduce((sum, w) => sum + w.amount, 0);
+    const trend = prevMonthPayroll > 0 
+      ? Math.round(((currentMonthPayroll - prevMonthPayroll) / prevMonthPayroll) * 100 * 10) / 10
+      : 0;
+
+    // Unique workers
+    const workerMap = new Map();
+    allWageRecords.forEach(record => {
+      if (record.workerId) {
+        const workerId = record.workerId._id.toString();
+        if (!workerMap.has(workerId)) {
+          workerMap.set(workerId, {
+            id: record.workerId._id,
+            name: record.workerId.name,
+            phone: record.workerId.phone,
+            idHash: record.workerId.idHash,
+            totalPaid: 0,
+            paymentCount: 0,
+            lastPayment: record.createdAt,
+            firstPayment: record.createdAt
+          });
+        }
+        const entry = workerMap.get(workerId);
+        entry.totalPaid += record.amount;
+        entry.paymentCount += 1;
+        if (new Date(record.createdAt) < new Date(entry.firstPayment)) {
+          entry.firstPayment = record.createdAt;
+        }
+      }
+    });
+    
+    const totalWorkers = workerMap.size;
+    // Active workers = paid in last 3 months
+    const threeMonthsAgo = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+    const activeWorkers = Array.from(workerMap.values()).filter(
+      w => new Date(w.lastPayment) >= threeMonthsAgo
+    ).length;
+
+    // Monthly payroll trend (last 12 months)
+    const monthlyPayrollTrend = [];
+    for (let i = 11; i >= 0; i--) {
+      const d = new Date(currentYear, currentMonth - i, 1);
+      const month = d.getMonth();
+      const year = d.getFullYear();
+      const monthRecords = allWageRecords.filter(w => {
+        const wd = new Date(w.createdAt);
+        return wd.getMonth() === month && wd.getFullYear() === year;
+      });
+      const amount = monthRecords.reduce((sum, w) => sum + w.amount, 0);
+      monthlyPayrollTrend.push({
+        month: d.toLocaleString('default', { month: 'short' }),
+        year: year,
+        amount
+      });
+    }
+
+    // Payments by description/category
+    const categoryMap = new Map();
+    allWageRecords.forEach(record => {
+      const category = record.description || 'General Wage';
+      if (!categoryMap.has(category)) {
+        categoryMap.set(category, 0);
+      }
+      categoryMap.set(category, categoryMap.get(category) + record.amount);
+    });
+    const paymentsByCategory = Array.from(categoryMap.entries())
+      .map(([category, amount]) => ({ category, amount }))
+      .sort((a, b) => b.amount - a.amount)
+      .slice(0, 5);
+
+    // Recent payments (last 10)
+    const recentPayments = allWageRecords.slice(0, 10).map(record => ({
+      id: record._id,
+      worker: record.workerId?.name || 'Unknown',
+      workerId: record.workerId?._id,
+      amount: record.amount,
+      date: record.createdAt,
+      status: record.status,
+      description: record.description,
+      referenceNumber: record.referenceNumber
+    }));
+
+    // Yearly summary
+    const yearlyPayments = allWageRecords
+      .filter(w => new Date(w.createdAt).getFullYear() === currentYear)
+      .reduce((sum, w) => sum + w.amount, 0);
+
+    return successResponse(res, {
+      companyName: employer.companyName,
+      totalWorkers,
+      activeWorkers,
+      totalPayments,
+      currentMonthPayroll,
+      yearlyPayments,
+      trend,
+      transactionCount: allWageRecords.length,
+      monthlyPayrollTrend,
+      paymentsByCategory,
+      recentPayments,
+      lastUpdated: new Date()
+    });
+  })
+);
+
+/**
+ * @route GET /api/employers/profile/workers/detailed
+ * @desc Get detailed worker list with payment breakdown
+ * @access Private (Employer)
+ */
+router.get(
+  '/profile/workers/detailed',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const employer = await Employer.findOne({ userId: req.user.id });
+    
+    if (!employer) {
+      return notFoundResponse(res, 'Employer profile not found');
+    }
+
+    const { search, sortBy = 'totalPaid', order = 'desc' } = req.query;
+
+    // Get all wage records for this employer
+    const allWageRecords = await WageRecord.find({
+      employerId: employer._id,
+      status: 'completed'
+    }).populate('workerId', 'name phone email idHash maskedAadhaar userId')
+      .sort({ createdAt: -1 });
+
+    const now = new Date();
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+
+    // Group by worker with detailed stats
+    const workerMap = new Map();
+    
+    allWageRecords.forEach(record => {
+      if (!record.workerId) return;
+      
+      const workerId = record.workerId._id.toString();
+      const recordDate = new Date(record.createdAt);
+      const recordMonth = recordDate.getMonth();
+      const recordYear = recordDate.getFullYear();
+      
+      if (!workerMap.has(workerId)) {
+        workerMap.set(workerId, {
+          id: record.workerId._id,
+          name: record.workerId.name || 'Unknown',
+          phone: record.workerId.phone,
+          email: record.workerId.email,
+          idHash: record.workerId.idHash,
+          maskedAadhaar: record.workerId.maskedAadhaar,
+          totalPaid: 0,
+          paymentCount: 0,
+          currentMonthPaid: 0,
+          currentYearPaid: 0,
+          lastPaymentDate: record.createdAt,
+          firstPaymentDate: record.createdAt,
+          monthlyBreakdown: {},
+          recentPayments: [],
+          status: 'active'
+        });
+      }
+      
+      const worker = workerMap.get(workerId);
+      worker.totalPaid += record.amount;
+      worker.paymentCount += 1;
+      
+      // Current month
+      if (recordMonth === currentMonth && recordYear === currentYear) {
+        worker.currentMonthPaid += record.amount;
+      }
+      
+      // Current year
+      if (recordYear === currentYear) {
+        worker.currentYearPaid += record.amount;
+      }
+      
+      // Monthly breakdown
+      const monthKey = `${recordYear}-${String(recordMonth + 1).padStart(2, '0')}`;
+      if (!worker.monthlyBreakdown[monthKey]) {
+        worker.monthlyBreakdown[monthKey] = { amount: 0, count: 0 };
+      }
+      worker.monthlyBreakdown[monthKey].amount += record.amount;
+      worker.monthlyBreakdown[monthKey].count += 1;
+      
+      // Update dates
+      if (recordDate > new Date(worker.lastPaymentDate)) {
+        worker.lastPaymentDate = record.createdAt;
+      }
+      if (recordDate < new Date(worker.firstPaymentDate)) {
+        worker.firstPaymentDate = record.createdAt;
+      }
+      
+      // Recent payments (keep last 5)
+      if (worker.recentPayments.length < 5) {
+        worker.recentPayments.push({
+          id: record._id,
+          amount: record.amount,
+          date: record.createdAt,
+          description: record.description,
+          referenceNumber: record.referenceNumber
+        });
+      }
+    });
+
+    // Determine active/inactive status (inactive if no payment in last 3 months)
+    const threeMonthsAgo = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+    workerMap.forEach(worker => {
+      worker.status = new Date(worker.lastPaymentDate) >= threeMonthsAgo ? 'active' : 'inactive';
+    });
+
+    let workers = Array.from(workerMap.values());
+
+    // Apply search filter
+    if (search) {
+      const searchLower = search.toLowerCase();
+      workers = workers.filter(w => 
+        w.name?.toLowerCase().includes(searchLower) ||
+        w.phone?.includes(search) ||
+        w.email?.toLowerCase().includes(searchLower)
+      );
+    }
+
+    // Apply sorting
+    workers.sort((a, b) => {
+      let comparison = 0;
+      switch (sortBy) {
+        case 'name':
+          comparison = (a.name || '').localeCompare(b.name || '');
+          break;
+        case 'totalPaid':
+          comparison = a.totalPaid - b.totalPaid;
+          break;
+        case 'lastPayment':
+          comparison = new Date(a.lastPaymentDate).getTime() - new Date(b.lastPaymentDate).getTime();
+          break;
+        case 'paymentCount':
+          comparison = a.paymentCount - b.paymentCount;
+          break;
+        default:
+          comparison = a.totalPaid - b.totalPaid;
+      }
+      return order === 'desc' ? -comparison : comparison;
+    });
+
+    return successResponse(res, {
+      workers,
+      count: workers.length,
+      summary: {
+        totalWorkers: workerMap.size,
+        activeWorkers: workers.filter(w => w.status === 'active').length,
+        inactiveWorkers: workers.filter(w => w.status === 'inactive').length,
+        totalPaidAllWorkers: workers.reduce((sum, w) => sum + w.totalPaid, 0)
+      }
+    });
+  })
+);
+
+/**
+ * @route GET /api/employers/profile/workers/:workerId/payments
+ * @desc Get payment history for a specific worker
+ * @access Private (Employer)
+ */
+router.get(
+  '/profile/workers/:workerId/payments',
+  authenticate,
+  validateObjectId('workerId'),
+  asyncHandler(async (req, res) => {
+    const employer = await Employer.findOne({ userId: req.user.id });
+    
+    if (!employer) {
+      return notFoundResponse(res, 'Employer profile not found');
+    }
+
+    const { workerId } = req.params;
+    const { year, month } = req.query;
+
+    // Build query
+    const query = {
+      employerId: employer._id,
+      workerId: workerId,
+      status: 'completed'
+    };
+
+    // Filter by year/month if provided
+    if (year) {
+      const startDate = new Date(parseInt(year), month ? parseInt(month) - 1 : 0, 1);
+      const endDate = month 
+        ? new Date(parseInt(year), parseInt(month), 0, 23, 59, 59)
+        : new Date(parseInt(year), 11, 31, 23, 59, 59);
+      query.createdAt = { $gte: startDate, $lte: endDate };
+    }
+
+    const payments = await WageRecord.find(query)
+      .sort({ createdAt: -1 });
+
+    const worker = await Worker.findById(workerId).select('name phone email idHash');
+
+    // Calculate summary
+    const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
+    
+    // Monthly breakdown
+    const monthlyBreakdown = {};
+    payments.forEach(p => {
+      const d = new Date(p.createdAt);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      if (!monthlyBreakdown[key]) {
+        monthlyBreakdown[key] = { amount: 0, count: 0, payments: [] };
+      }
+      monthlyBreakdown[key].amount += p.amount;
+      monthlyBreakdown[key].count += 1;
+      monthlyBreakdown[key].payments.push({
+        id: p._id,
+        amount: p.amount,
+        date: p.createdAt,
+        description: p.description,
+        referenceNumber: p.referenceNumber,
+        paymentMethod: p.paymentMethod
+      });
+    });
+
+    // Yearly breakdown
+    const yearlyBreakdown = {};
+    payments.forEach(p => {
+      const year = new Date(p.createdAt).getFullYear();
+      if (!yearlyBreakdown[year]) {
+        yearlyBreakdown[year] = { amount: 0, count: 0 };
+      }
+      yearlyBreakdown[year].amount += p.amount;
+      yearlyBreakdown[year].count += 1;
+    });
+
+    return successResponse(res, {
+      worker: worker ? {
+        id: worker._id,
+        name: worker.name,
+        phone: worker.phone,
+        email: worker.email,
+        idHash: worker.idHash
+      } : null,
+      payments: payments.map(p => ({
+        id: p._id,
+        amount: p.amount,
+        date: p.createdAt,
+        description: p.description,
+        referenceNumber: p.referenceNumber,
+        paymentMethod: p.paymentMethod,
+        status: p.status
+      })),
+      summary: {
+        totalPaid,
+        paymentCount: payments.length,
+        avgPayment: payments.length > 0 ? Math.round(totalPaid / payments.length) : 0
+      },
+      monthlyBreakdown,
+      yearlyBreakdown
+    });
+  })
+);
+
+/**
  * @route GET /api/employers
  * @desc Get all employers
  * @access Private (Admin, Government)

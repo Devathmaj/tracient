@@ -68,7 +68,9 @@ export const createWagePayment = async (req, res) => {
       referenceNumber,
       transactionType: TRANSACTION_TYPES.WAGE,
       status: PAYMENT_STATUS.PENDING,
-      source: 'manual',
+      source: employer ? 'employer' : 'manual',
+      incomeSource: employer ? employer.companyName : 'Direct Payment',
+      isVerified: !!employer,
       syncedToBlockchain: false,
       statusHistory: [{
         status: PAYMENT_STATUS.PENDING,
@@ -423,7 +425,9 @@ export const processBulkTransactions = async (req, res) => {
           referenceNumber,
           transactionType: TRANSACTION_TYPES.WAGE,
           status: PAYMENT_STATUS.COMPLETED,
-          source: 'bulk_upload',
+          source: employer ? 'employer' : 'bulk_upload',
+          incomeSource: employer ? employer.companyName : (tx.incomeSource || 'Bulk Upload'),
+          isVerified: !!employer,
           completedAt: new Date(),
           syncedToBlockchain: false // Mark for blockchain sync
         });
