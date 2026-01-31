@@ -25,6 +25,7 @@ import {
   Alert
 } from '@/components/common';
 import { formatDate, formatNumber } from '@/utils/formatters';
+import api from '@/services/api';
 
 interface Organization {
   id: string;
@@ -46,123 +47,10 @@ interface Organization {
   lastActivity: string;
 }
 
-const mockOrganizations: Organization[] = [
-  {
-    id: 'ORG001',
-    name: 'ABC Construction Pvt Ltd',
-    type: 'employer',
-    registrationNumber: 'CIN1234567890',
-    gstin: '29AABCU9603R1ZM',
-    email: 'admin@abcconstruction.com',
-    phone: '+91 11 2345 6789',
-    address: '123, Industrial Area, Phase 2',
-    city: 'Mumbai',
-    state: 'Maharashtra',
-    sector: 'Construction',
-    employeeCount: 45,
-    workerCount: 1250,
-    status: 'active',
-    verificationStatus: 'verified',
-    createdAt: '2023-04-10',
-    lastActivity: '2024-01-15T14:30:00',
-  },
-  {
-    id: 'ORG002',
-    name: 'Tech Solutions Ltd',
-    type: 'employer',
-    registrationNumber: 'CIN9876543210',
-    gstin: '29AABCU9603R1ZX',
-    email: 'contact@techsolutions.com',
-    phone: '+91 80 4567 8901',
-    address: '456, IT Park, Whitefield',
-    city: 'Bangalore',
-    state: 'Karnataka',
-    sector: 'IT Services',
-    employeeCount: 120,
-    workerCount: 850,
-    status: 'active',
-    verificationStatus: 'verified',
-    createdAt: '2023-06-15',
-    lastActivity: '2024-01-15T10:00:00',
-  },
-  {
-    id: 'ORG003',
-    name: 'Green Farms Agricultural Co.',
-    type: 'employer',
-    registrationNumber: 'CIN5555555555',
-    email: 'info@greenfarms.com',
-    phone: '+91 40 9876 5432',
-    address: '789, Agricultural Zone',
-    city: 'Hyderabad',
-    state: 'Telangana',
-    sector: 'Agriculture',
-    employeeCount: 25,
-    workerCount: 2500,
-    status: 'active',
-    verificationStatus: 'verified',
-    createdAt: '2023-02-20',
-    lastActivity: '2024-01-14T16:00:00',
-  },
-  {
-    id: 'ORG004',
-    name: 'Ministry of Labour & Employment',
-    type: 'government',
-    registrationNumber: 'GOV-MOLE-001',
-    email: 'contact@labour.gov.in',
-    phone: '+91 11 1234 5678',
-    address: 'Shram Shakti Bhawan',
-    city: 'New Delhi',
-    state: 'Delhi',
-    sector: 'Government',
-    employeeCount: 500,
-    workerCount: 0,
-    status: 'active',
-    verificationStatus: 'verified',
-    createdAt: '2023-01-01',
-    lastActivity: '2024-01-15T09:00:00',
-  },
-  {
-    id: 'ORG005',
-    name: 'Green Energy Ltd',
-    type: 'employer',
-    registrationNumber: 'CIN7777777777',
-    gstin: '29AABCU9603R1ZY',
-    email: 'hr@greenenergy.com',
-    phone: '+91 22 8765 4321',
-    address: '321, Energy Park',
-    city: 'Pune',
-    state: 'Maharashtra',
-    sector: 'Energy',
-    employeeCount: 80,
-    workerCount: 450,
-    status: 'pending',
-    verificationStatus: 'pending',
-    createdAt: '2024-01-10',
-    lastActivity: '2024-01-10T11:00:00',
-  },
-  {
-    id: 'ORG006',
-    name: 'Rural Development Foundation',
-    type: 'ngo',
-    registrationNumber: 'NGO-RDF-001',
-    email: 'contact@rdf.org',
-    phone: '+91 33 2222 3333',
-    address: '55, NGO Complex',
-    city: 'Kolkata',
-    state: 'West Bengal',
-    sector: 'Social Welfare',
-    employeeCount: 30,
-    workerCount: 0,
-    status: 'active',
-    verificationStatus: 'verified',
-    createdAt: '2023-08-15',
-    lastActivity: '2024-01-12T15:30:00',
-  },
-];
-
 const Organizations: React.FC = () => {
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -173,9 +61,57 @@ const Organizations: React.FC = () => {
 
   useEffect(() => {
     const fetchOrganizations = async () => {
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      setOrganizations(mockOrganizations);
-      setIsLoading(false);
+      try {
+        setIsLoading(true);
+        setError(null);
+        
+        // Fetch employers from API
+        const response = await api.get('/employers', {
+          params: { limit: 100 }
+        });
+        
+        const employers = response.data?.data || [];
+        
+        // Map API response to Organization interface
+        const mappedOrgs: Organization[] = employers.map((emp: any) => {
+          // Determine org type based on companyType
+          let orgType: 'employer' | 'government' | 'ngo' = 'employer';
+          if (emp.companyType === 'govt') orgType = 'government';
+          else if (emp.companyType === 'ngo') orgType = 'ngo';
+          
+          // Determine status based on isActive and verificationStatus
+          let status: 'active' | 'pending' | 'suspended' | 'inactive' = 'active';
+          if (!emp.isActive) status = emp.suspendedAt ? 'suspended' : 'inactive';
+          else if (emp.verificationStatus === 'pending') status = 'pending';
+          
+          return {
+            id: emp._id,
+            name: emp.companyName || 'Unknown Company',
+            type: orgType,
+            registrationNumber: emp.registrationNumber || emp.panNumber || 'N/A',
+            gstin: emp.gstin,
+            email: emp.email || emp.user?.email || '',
+            phone: emp.phone || '',
+            address: emp.address?.street || '',
+            city: emp.address?.city || '',
+            state: emp.address?.state || '',
+            sector: emp.sector || emp.industry || 'other',
+            employeeCount: 0, // Not tracked in backend
+            workerCount: emp.totalWorkers || emp.activeWorkers || 0,
+            status,
+            verificationStatus: emp.verificationStatus || 'pending',
+            createdAt: emp.createdAt,
+            lastActivity: emp.updatedAt || emp.createdAt,
+          };
+        });
+        
+        setOrganizations(mappedOrgs);
+      } catch (err: any) {
+        console.error('Error fetching organizations:', err);
+        setError(err.response?.data?.message || 'Failed to load organizations');
+      } finally {
+        setIsLoading(false);
+      }
     };
     fetchOrganizations();
   }, []);
@@ -309,6 +245,16 @@ const Organizations: React.FC = () => {
     return (
       <div className="flex items-center justify-center h-96">
         <Spinner size="lg" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="p-6">
+        <Alert variant="error" title="Error loading organizations">
+          {error}
+        </Alert>
       </div>
     );
   }

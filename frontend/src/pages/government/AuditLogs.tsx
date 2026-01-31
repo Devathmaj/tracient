@@ -9,7 +9,8 @@ import {
   CheckCircle2,
   XCircle,
   IndianRupee,
-  Eye
+  Eye,
+  AlertTriangle
 } from 'lucide-react';
 import { 
   Card, 
@@ -23,13 +24,14 @@ import {
   Table
 } from '@/components/common';
 import { formatDate } from '@/utils/formatters';
+import api from '@/services/api';
 
 interface AuditLog {
   id: string;
   transactionId: string;
   blockNumber: number;
   timestamp: string;
-  eventType: 'wage_recorded' | 'worker_registered' | 'employer_registered' | 'bpl_status_updated' | 'anomaly_flagged' | 'policy_updated';
+  eventType: 'wage_recorded' | 'worker_registered' | 'employer_registered' | 'bpl_status_updated' | 'anomaly_flagged' | 'policy_updated' | string;
   performedBy: {
     id: string;
     name: string;
@@ -46,103 +48,10 @@ interface AuditLog {
   userAgent: string;
 }
 
-const mockAuditLogs: AuditLog[] = [
-  {
-    id: 'LOG001',
-    transactionId: '0x7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f',
-    blockNumber: 1245678,
-    timestamp: '2024-01-15T14:30:25',
-    eventType: 'wage_recorded',
-    performedBy: { id: 'E001', name: 'ABC Construction', role: 'Employer' },
-    target: { id: 'W001', name: 'Rajesh Kumar', type: 'Worker' },
-    details: { amount: 45000, wageType: 'monthly', period: 'January 2024' },
-    status: 'success',
-    ipAddress: '192.168.1.100',
-    userAgent: 'Chrome/120.0 Windows',
-  },
-  {
-    id: 'LOG002',
-    transactionId: '0x8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a',
-    blockNumber: 1245677,
-    timestamp: '2024-01-15T14:15:10',
-    eventType: 'worker_registered',
-    performedBy: { id: 'E005', name: 'Tech Solutions', role: 'Employer' },
-    target: { id: 'W156', name: 'Priya Sharma', type: 'Worker' },
-    details: { aadhaar: 'XXXX-XXXX-4567', sector: 'IT Services' },
-    status: 'success',
-    ipAddress: '192.168.2.50',
-    userAgent: 'Firefox/121.0 Windows',
-  },
-  {
-    id: 'LOG003',
-    transactionId: '0x9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b',
-    blockNumber: 1245676,
-    timestamp: '2024-01-15T13:45:00',
-    eventType: 'bpl_status_updated',
-    performedBy: { id: 'SYS', name: 'Automated System', role: 'System' },
-    target: { id: 'W089', name: 'Sunita Devi', type: 'Worker' },
-    details: { previousStatus: 'BPL', newStatus: 'APL', reason: 'Income threshold exceeded' },
-    status: 'success',
-    ipAddress: 'System',
-    userAgent: 'TRACIENT/1.0 Automated',
-  },
-  {
-    id: 'LOG004',
-    transactionId: '0x0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c',
-    blockNumber: 1245675,
-    timestamp: '2024-01-15T12:30:00',
-    eventType: 'anomaly_flagged',
-    performedBy: { id: 'AI', name: 'AI Detection System', role: 'System' },
-    target: { id: 'TXN001', name: 'Duplicate Payment Alert', type: 'Transaction' },
-    details: { severity: 'critical', confidence: 98, type: 'duplicate_payment' },
-    status: 'success',
-    ipAddress: 'System',
-    userAgent: 'TRACIENT/1.0 AI Module',
-  },
-  {
-    id: 'LOG005',
-    transactionId: '0x1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d',
-    blockNumber: 1245674,
-    timestamp: '2024-01-15T11:00:00',
-    eventType: 'policy_updated',
-    performedBy: { id: 'G001', name: 'Admin User', role: 'Government Admin' },
-    target: { id: 'POL001', name: 'BPL Threshold', type: 'Policy' },
-    details: { oldValue: '100000', newValue: '120000', reason: 'Annual revision' },
-    status: 'success',
-    ipAddress: '10.0.0.15',
-    userAgent: 'Chrome/120.0 Windows',
-  },
-  {
-    id: 'LOG006',
-    transactionId: '0x2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e',
-    blockNumber: 1245673,
-    timestamp: '2024-01-15T10:15:30',
-    eventType: 'employer_registered',
-    performedBy: { id: 'ADM', name: 'System Admin', role: 'Admin' },
-    target: { id: 'E025', name: 'Green Energy Ltd', type: 'Employer' },
-    details: { gstin: '29AABCU9603R1ZX', sector: 'Energy', employeeCount: 150 },
-    status: 'success',
-    ipAddress: '10.0.0.10',
-    userAgent: 'Edge/120.0 Windows',
-  },
-  {
-    id: 'LOG007',
-    transactionId: '0x3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f',
-    blockNumber: 1245672,
-    timestamp: '2024-01-15T09:30:00',
-    eventType: 'wage_recorded',
-    performedBy: { id: 'E012', name: 'Green Farms', role: 'Employer' },
-    target: { id: 'W045', name: 'Amit Singh', type: 'Worker' },
-    details: { amount: 18000, wageType: 'monthly', period: 'January 2024' },
-    status: 'failed',
-    ipAddress: '192.168.5.200',
-    userAgent: 'Chrome/120.0 Android',
-  },
-];
-
 const AuditLogs: React.FC = () => {
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [eventTypeFilter, setEventTypeFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -150,18 +59,57 @@ const AuditLogs: React.FC = () => {
   const [selectedLog, setSelectedLog] = useState<AuditLog | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  useEffect(() => {
-    const fetchLogs = async () => {
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      setLogs(mockAuditLogs);
+  const fetchLogs = async () => {
+    try {
+      setError(null);
+      // Build query params
+      const params: Record<string, string> = { limit: '50' };
+      if (eventTypeFilter !== 'all') params.action = eventTypeFilter;
+      
+      const response: any = await api.get('/admin/audit-logs', { params });
+      
+      if (response.success && response.data) {
+        const mappedLogs: AuditLog[] = response.data.map((log: any) => ({
+          id: log._id,
+          transactionId: log.transactionHash || log._id,
+          blockNumber: log.blockNumber || 0,
+          timestamp: log.timestamp || log.createdAt,
+          eventType: log.action || 'unknown',
+          performedBy: {
+            id: log.userId?._id || log.userId || 'system',
+            name: log.userId?.name || log.userName || 'System',
+            role: log.userId?.role || log.userRole || 'system'
+          },
+          target: {
+            id: log.entityId || log.targetId || '',
+            name: log.entityName || log.metadata?.targetName || 'N/A',
+            type: log.entityType || log.targetType || 'unknown'
+          },
+          details: log.metadata || log.details || {},
+          status: log.status || 'success',
+          ipAddress: log.ipAddress || 'N/A',
+          userAgent: log.userAgent || 'N/A'
+        }));
+        setLogs(mappedLogs);
+      } else {
+        setLogs([]);
+      }
+    } catch (err: any) {
+      console.error('Failed to fetch audit logs:', err);
+      setError(err.message || 'Failed to load audit logs');
+      setLogs([]);
+    } finally {
       setIsLoading(false);
-    };
+    }
+  };
+
+  useEffect(() => {
     fetchLogs();
   }, []);
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    await fetchLogs();
     setIsRefreshing(false);
   };
 
@@ -190,8 +138,8 @@ const AuditLogs: React.FC = () => {
     { value: 'all', label: 'All Time' },
   ];
 
-  const getEventTypeLabel = (type: AuditLog['eventType']) => {
-    const labels = {
+  const getEventTypeLabel = (type: string) => {
+    const labels: Record<string, string> = {
       wage_recorded: 'Wage Recorded',
       worker_registered: 'Worker Registered',
       employer_registered: 'Employer Registered',
@@ -199,19 +147,19 @@ const AuditLogs: React.FC = () => {
       anomaly_flagged: 'Anomaly Flagged',
       policy_updated: 'Policy Updated',
     };
-    return labels[type];
+    return labels[type] || type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
   };
 
-  const getEventTypeBadge = (type: AuditLog['eventType']) => {
-    const config = {
-      wage_recorded: { variant: 'success' as const, icon: IndianRupee },
-      worker_registered: { variant: 'primary' as const, icon: User },
-      employer_registered: { variant: 'primary' as const, icon: Building2 },
-      bpl_status_updated: { variant: 'warning' as const, icon: CheckCircle2 },
-      anomaly_flagged: { variant: 'error' as const, icon: XCircle },
-      policy_updated: { variant: 'default' as const, icon: FileText },
+  const getEventTypeBadge = (type: string) => {
+    const config: Record<string, { variant: 'success' | 'primary' | 'warning' | 'error' | 'default'; icon: any }> = {
+      wage_recorded: { variant: 'success', icon: IndianRupee },
+      worker_registered: { variant: 'primary', icon: User },
+      employer_registered: { variant: 'primary', icon: Building2 },
+      bpl_status_updated: { variant: 'warning', icon: CheckCircle2 },
+      anomaly_flagged: { variant: 'error', icon: XCircle },
+      policy_updated: { variant: 'default', icon: FileText },
     };
-    return config[type];
+    return config[type] || { variant: 'default' as const, icon: FileText };
   };
 
   const getStatusBadge = (status: AuditLog['status']) => {
@@ -305,6 +253,16 @@ const AuditLogs: React.FC = () => {
     return (
       <div className="flex items-center justify-center h-96">
         <Spinner size="lg" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center h-96 space-y-4">
+        <AlertTriangle className="h-12 w-12 text-red-500" />
+        <p className="text-lg text-gray-600">{error}</p>
+        <Button onClick={handleRefresh}>Retry</Button>
       </div>
     );
   }

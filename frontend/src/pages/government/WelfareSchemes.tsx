@@ -10,7 +10,8 @@ import {
   CheckCircle2,
   XCircle,
   Clock,
-  Eye
+  Eye,
+  AlertTriangle
 } from 'lucide-react';
 import { 
   Card, 
@@ -24,6 +25,7 @@ import {
   StatCard
 } from '@/components/common';
 import { formatCurrency, formatDate, formatNumber } from '@/utils/formatters';
+import api from '@/services/api';
 
 interface WelfareScheme {
   id: string;
@@ -42,108 +44,10 @@ interface WelfareScheme {
   ministry: string;
 }
 
-const mockSchemes: WelfareScheme[] = [
-  {
-    id: 'SCH001',
-    name: 'PM Kisan Samman Nidhi',
-    description: 'Direct income support of ₹6,000 per year to small and marginal farmer families',
-    category: 'Agriculture',
-    benefitType: 'cash',
-    benefitAmount: 6000,
-    eligibilityCriteria: ['BPL Status', 'Land ownership < 2 hectares', 'Valid Aadhaar'],
-    totalBudget: 75000000000,
-    disbursed: 62500000000,
-    beneficiariesCount: 12500000,
-    status: 'active',
-    startDate: '2023-04-01',
-    endDate: '2024-03-31',
-    ministry: 'Ministry of Agriculture',
-  },
-  {
-    id: 'SCH002',
-    name: 'MGNREGA',
-    description: 'Guaranteed 100 days of wage employment per year to rural households',
-    category: 'Employment',
-    benefitType: 'cash',
-    benefitAmount: 54800,
-    eligibilityCriteria: ['Rural resident', 'BPL Status', 'Job card holder'],
-    totalBudget: 90000000000,
-    disbursed: 78000000000,
-    beneficiariesCount: 8500000,
-    status: 'active',
-    startDate: '2023-04-01',
-    endDate: '2024-03-31',
-    ministry: 'Ministry of Rural Development',
-  },
-  {
-    id: 'SCH003',
-    name: 'Ayushman Bharat',
-    description: 'Health insurance coverage up to ₹5 lakh per family per year',
-    category: 'Health',
-    benefitType: 'insurance',
-    benefitAmount: 500000,
-    eligibilityCriteria: ['BPL Status', 'No existing health insurance'],
-    totalBudget: 65000000000,
-    disbursed: 45000000000,
-    beneficiariesCount: 18900000,
-    status: 'active',
-    startDate: '2023-04-01',
-    endDate: '2024-03-31',
-    ministry: 'Ministry of Health',
-  },
-  {
-    id: 'SCH004',
-    name: 'PM Awas Yojana',
-    description: 'Assistance for construction of pucca houses for rural poor',
-    category: 'Housing',
-    benefitType: 'subsidy',
-    benefitAmount: 120000,
-    eligibilityCriteria: ['BPL Status', 'No pucca house', 'Rural resident'],
-    totalBudget: 48000000000,
-    disbursed: 32000000000,
-    beneficiariesCount: 2800000,
-    status: 'active',
-    startDate: '2023-04-01',
-    endDate: '2024-03-31',
-    ministry: 'Ministry of Housing',
-  },
-  {
-    id: 'SCH005',
-    name: 'Mid-Day Meal Scheme',
-    description: 'Free lunch on school days for children in government schools',
-    category: 'Education',
-    benefitType: 'service',
-    benefitAmount: 4500,
-    eligibilityCriteria: ['Enrolled in government school', 'Classes 1-8'],
-    totalBudget: 12000000000,
-    disbursed: 10800000000,
-    beneficiariesCount: 95000000,
-    status: 'active',
-    startDate: '2023-04-01',
-    endDate: '2024-03-31',
-    ministry: 'Ministry of Education',
-  },
-  {
-    id: 'SCH006',
-    name: 'PM Ujjwala Yojana 2.0',
-    description: 'Free LPG connections and subsidized refills for BPL households',
-    category: 'Energy',
-    benefitType: 'subsidy',
-    benefitAmount: 1600,
-    eligibilityCriteria: ['BPL Status', 'No existing LPG connection', 'Female head of household'],
-    totalBudget: 8000000000,
-    disbursed: 6500000000,
-    beneficiariesCount: 4500000,
-    status: 'paused',
-    startDate: '2023-04-01',
-    endDate: '2024-03-31',
-    ministry: 'Ministry of Petroleum',
-  },
-];
-
 const WelfareSchemes: React.FC = () => {
   const [schemes, setSchemes] = useState<WelfareScheme[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -152,9 +56,41 @@ const WelfareSchemes: React.FC = () => {
 
   useEffect(() => {
     const fetchSchemes = async () => {
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      setSchemes(mockSchemes);
-      setIsLoading(false);
+      try {
+        setIsLoading(true);
+        setError(null);
+        
+        const response: any = await api.get('/government/welfare-schemes');
+        
+        if (response.success && response.data) {
+          const mappedSchemes: WelfareScheme[] = response.data.map((scheme: any) => ({
+            id: scheme._id || scheme.id,
+            name: scheme.name,
+            description: scheme.description || '',
+            category: scheme.category || 'General',
+            benefitType: scheme.benefitType || 'cash',
+            benefitAmount: scheme.benefitAmount || scheme.benefits?.amount || 0,
+            eligibilityCriteria: scheme.eligibilityCriteria?.criteria || scheme.eligibilityCriteria || [],
+            totalBudget: scheme.budget?.allocated || scheme.totalBudget || 0,
+            disbursed: scheme.budget?.utilized || scheme.disbursed || 0,
+            beneficiariesCount: scheme.beneficiariesCount || 0,
+            status: scheme.status || 'active',
+            startDate: scheme.startDate || new Date().toISOString(),
+            endDate: scheme.endDate || new Date().toISOString(),
+            ministry: scheme.ministry || 'Government'
+          }));
+          setSchemes(mappedSchemes);
+        } else {
+          // No schemes found, show empty state
+          setSchemes([]);
+        }
+      } catch (err: any) {
+        console.error('Failed to fetch welfare schemes:', err);
+        setError(err.message || 'Failed to load welfare schemes');
+        setSchemes([]);
+      } finally {
+        setIsLoading(false);
+      }
     };
     fetchSchemes();
   }, []);
@@ -213,6 +149,16 @@ const WelfareSchemes: React.FC = () => {
     return (
       <div className="flex items-center justify-center h-96">
         <Spinner size="lg" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center h-96 space-y-4">
+        <AlertTriangle className="h-12 w-12 text-red-500" />
+        <p className="text-lg text-gray-600">{error}</p>
+        <Button onClick={() => window.location.reload()}>Retry</Button>
       </div>
     );
   }
