@@ -27,6 +27,8 @@ import {
 import { formatCurrency, formatDate } from '@/utils/formatters';
 import { CHART_COLORS } from '@/utils/constants';
 import { get } from '@/services/api';
+import { familyService } from '@/services/familyService';
+import type { Family } from '@/types/family';
 
 interface DashboardData {
   totalEarnings: number;
@@ -93,6 +95,7 @@ const WorkerDashboard: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [bplStatus, setBplStatus] = useState<'eligible' | 'not_eligible'>('not_eligible');
+  const [family, setFamily] = useState<Family | null>(null);
   const [classificationInfo, setClassificationInfo] = useState<any>(null);
 
   useEffect(() => {
@@ -107,22 +110,52 @@ const WorkerDashboard: React.FC = () => {
           setData(response.data);
         }
         
-        // Fetch APL/BPL classification status
+        // Fetch family data (same as welfare page)
         try {
-          const classificationRes = await get<{ success: boolean; data: any }>('/workers/profile/welfare-classification');
-          if (classificationRes.success && classificationRes.data?.hasClassification) {
-            const classification = classificationRes.data.classification;
-            setBplStatus(classification.classification === 'BPL' ? 'eligible' : 'not_eligible');
-            setClassificationInfo(classification);
-          } else {
-            // Fallback to simple welfare status
-            const welfareRes = await get<{ success: boolean; data: any }>('/workers/profile/welfare');
-            if (welfareRes.success && welfareRes.data) {
-              setBplStatus(welfareRes.data.status === 'BPL' ? 'eligible' : 'not_eligible');
+          const familyData = await familyService.getMyFamily();
+          if (familyData.family) {
+            setFamily(familyData.family);
+            
+            // Set BPL status based on family classification (same logic as welfare page)
+            if (familyData.family.classification && familyData.family.classification !== 'pending') {
+              setBplStatus(familyData.family.classification === 'BPL' ? 'eligible' : 'not_eligible');
+              
+              // Set classification info to match welfare page format
+              setClassificationInfo({
+                classification: familyData.family.classification,
+                annualIncome: familyData.family.annual_income || 0,
+                mlConfidence: familyData.family.classification_confidence || 0,
+                createdAt: familyData.family.classified_at || familyData.family.createdAt,
+                reason: familyData.family.classification_reason || 'Classification completed'
+              });
+            } else {
+              // Fallback to other endpoints if family classification not available
+              const classificationRes = await get<{ success: boolean; data: any }>('/workers/profile/welfare-classification');
+              if (classificationRes.success && classificationRes.data?.hasClassification) {
+                const classification = classificationRes.data.classification;
+                setBplStatus(classification.classification === 'BPL' ? 'eligible' : 'not_eligible');
+                setClassificationInfo(classification);
+              }
             }
           }
-        } catch (classErr) {
-          console.error('Classification fetch failed:', classErr);
+        } catch (familyErr) {
+          console.error('Family data fetch failed, using fallback:', familyErr);
+          // Fallback to original endpoints
+          try {
+            const classificationRes = await get<{ success: boolean; data: any }>('/workers/profile/welfare-classification');
+            if (classificationRes.success && classificationRes.data?.hasClassification) {
+              const classification = classificationRes.data.classification;
+              setBplStatus(classification.classification === 'BPL' ? 'eligible' : 'not_eligible');
+              setClassificationInfo(classification);
+            } else {
+              const welfareRes = await get<{ success: boolean; data: any }>('/workers/profile/welfare');
+              if (welfareRes.success && welfareRes.data) {
+                setBplStatus(welfareRes.data.status === 'BPL' ? 'eligible' : 'not_eligible');
+              }
+            }
+          } catch (classErr) {
+            console.error('Classification fetch failed:', classErr);
+          }
         }
       } catch (err: any) {
         console.error('Failed to fetch dashboard data:', err);
