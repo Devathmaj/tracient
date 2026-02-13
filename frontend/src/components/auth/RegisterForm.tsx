@@ -103,17 +103,19 @@ const WorkerRegistrationForm: React.FC<{
 
         <Input
           label="Aadhaar Number"
-          placeholder="XXXX XXXX XXXX"
+          placeholder="Enter 12-digit Aadhaar number"
           leftIcon={<CreditCard className="h-5 w-5" />}
           error={errors.aadhaar?.message}
+          maxLength={12}
           {...register('aadhaar')}
         />
 
         <Input
           label="Ration Card Number (Optional)"
-          placeholder="Enter 12-digit ration card number"
+          placeholder="Enter ration card number (e.g., AP1234567890)"
           leftIcon={<CreditCard className="h-5 w-5" />}
           error={errors.ration_no?.message}
+          maxLength={15}
           {...register('ration_no')}
         />
 
@@ -381,9 +383,10 @@ const EmployerRegistrationForm: React.FC<{
 
         <Input
           label="Ration Card Number (Optional)"
-          placeholder="Enter 12-digit ration card number"
+          placeholder="Enter ration card number (e.g., AP1234567890)"
           leftIcon={<CreditCard className="h-5 w-5" />}
           error={errors.ration_no?.message}
+          maxLength={15}
           {...register('ration_no')}
         />
 

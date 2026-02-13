@@ -829,12 +829,16 @@ export const updateClassificationPolicy = async (req, res) => {
     await AuditLog.create({
       userId: req.user._id,
       action: 'policy_updated',
-      entityType: 'classification_policy',
-      entityId: policy._id,
-      details: {
+      category: 'policy',
+      resourceType: 'classification_policy',
+      resourceId: policy._id,
+      resourceName: policy.name,
+      description: `Updated classification policy: ${policy.name}`,
+      metadata: {
         policyId: policy.policyId,
         updatedFields: Object.keys(updates).filter(k => k !== 'reason')
-      }
+      },
+      success: true
     });
     
     logger.info(`Classification policy updated: ${policyId} by user ${req.user._id}`);
@@ -868,13 +872,16 @@ export const deleteClassificationPolicy = async (req, res) => {
       await AuditLog.create({
         userId: req.user._id,
         action: 'policy_deleted',
-        entityType: 'classification_policy',
-        entityId: policy._id,
-        details: {
+        category: 'policy',
+        resourceType: 'classification_policy',
+        resourceId: policy._id,
+        resourceName: policy.name,
+        description: `Permanently deleted classification policy: ${policy.name}`,
+        metadata: {
           policyId: policy.policyId,
-          name: policy.name,
           reason
-        }
+        },
+        success: true
       });
       
       logger.info(`Classification policy permanently deleted: ${policyId} by user ${req.user._id}`);
@@ -900,12 +907,16 @@ export const deleteClassificationPolicy = async (req, res) => {
     await AuditLog.create({
       userId: req.user._id,
       action: 'policy_deactivated',
-      entityType: 'classification_policy',
-      entityId: policy._id,
-      details: {
+      category: 'policy',
+      resourceType: 'classification_policy',
+      resourceId: policy._id,
+      resourceName: policy.name,
+      description: `Deactivated classification policy: ${policy.name}`,
+      metadata: {
         policyId: policy.policyId,
         reason
-      }
+      },
+      success: true
     });
     
     logger.info(`Classification policy deactivated: ${policyId} by user ${req.user._id}`);
@@ -931,14 +942,16 @@ export const applyClassificationPolicies = async (req, res) => {
     await AuditLog.create({
       userId: req.user._id,
       action: 'policies_applied',
-      entityType: 'system',
-      entityId: null,
-      details: {
+      category: 'system',
+      resourceType: 'classification_policies',
+      description: 'Applied all active classification policies to existing families',
+      metadata: {
         totalFamilies: result.totalFamilies,
         reclassified: result.reclassified,
         unchanged: result.unchanged,
         errors: result.errors
-      }
+      },
+      success: true
     });
     
     return successResponse(res, result, 'Policy application completed');

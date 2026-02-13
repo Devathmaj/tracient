@@ -124,3 +124,130 @@ export const formatUptime = (uptime: number): string => {
 export const formatNumber = (num: number): string => {
   return num.toLocaleString('en-IN');
 };
+
+/**
+ * Format Aadhaar number with spaces for better readability
+ * @param value - The Aadhaar number string
+ * @returns Formatted Aadhaar number (XXXX XXXX XXXX)
+ */
+export const formatAadhaar = (value: string): string => {
+  // Remove all non-digit characters
+  const digits = value.replace(/\D/g, '');
+  
+  // Limit to 12 digits
+  const limitedDigits = digits.slice(0, 12);
+  
+  // Add spaces every 4 digits
+  return limitedDigits.replace(/(\d{4})(?=\d)/g, '$1 ');
+};
+
+/**
+ * Format phone number for display
+ * @param value - The phone number string
+ * @returns Formatted phone number
+ */
+export const formatPhoneNumber = (value: string): string => {
+  // Remove all non-digit characters
+  const digits = value.replace(/\D/g, '');
+  
+  // Limit to 10 digits for Indian phone numbers
+  const limitedDigits = digits.slice(0, 10);
+  
+  // Format as XXXXX XXXXX
+  if (limitedDigits.length > 5) {
+    return limitedDigits.slice(0, 5) + ' ' + limitedDigits.slice(5);
+  }
+  
+  return limitedDigits;
+};
+
+/**
+ * Format PAN number for display
+ * @param value - The PAN number string
+ * @returns Formatted PAN number
+ */
+export const formatPAN = (value: string): string => {
+  // Convert to uppercase and remove invalid characters
+  const cleaned = value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  
+  // Limit to 10 characters
+  return cleaned.slice(0, 10);
+};
+
+/**
+ * Format ration card number for display
+ * @param value - The ration card number string
+ * @returns Formatted ration card number
+ */
+export const formatRationCard = (value: string): string => {
+  // Convert to uppercase and remove invalid characters
+  const cleaned = value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  
+  // Limit to 15 characters
+  return cleaned.slice(0, 15);
+};
+
+/**
+ * Validate and format Indian names
+ * @param value - The name string
+ * @returns Cleaned name with proper spacing
+ */
+export const formatName = (value: string): string => {
+  // Remove extra spaces and trim
+  return value
+    .replace(/[^a-zA-Z ]/g, '') // Only letters and spaces
+    .replace(/\s+/g, ' ') // Replace multiple spaces with single space
+    .trim();
+};
+
+/**
+ * Validate Indian mobile number
+ * @param phone - Phone number string
+ * @returns boolean indicating if valid
+ */
+export const isValidIndianMobile = (phone: string): boolean => {
+  const cleaned = phone.replace(/\D/g, '');
+  return /^[6-9]\d{9}$/.test(cleaned);
+};
+
+/**
+ * Validate Aadhaar checksum using Verhoeff algorithm
+ * @param aadhaar - Aadhaar number string
+ * @returns boolean indicating if valid
+ */
+export const validateAadhaarChecksum = (aadhaar: string): boolean => {
+  const cleaned = aadhaar.replace(/\D/g, '');
+  if (cleaned.length !== 12) return false;
+  
+  const d = [
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+    [1, 2, 3, 4, 0, 6, 7, 8, 9, 5],
+    [2, 3, 4, 0, 1, 7, 8, 9, 5, 6],
+    [3, 4, 0, 1, 2, 8, 9, 5, 6, 7],
+    [4, 0, 1, 2, 3, 9, 5, 6, 7, 8],
+    [5, 9, 8, 7, 6, 0, 4, 3, 2, 1],
+    [6, 5, 9, 8, 7, 1, 0, 4, 3, 2],
+    [7, 6, 5, 9, 8, 2, 1, 0, 4, 3],
+    [8, 7, 6, 5, 9, 3, 2, 1, 0, 4],
+    [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]
+  ];
+  const p = [
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+    [1, 5, 7, 6, 2, 8, 3, 0, 9, 4],
+    [5, 8, 0, 3, 7, 9, 6, 1, 4, 2],
+    [8, 9, 1, 6, 0, 4, 3, 5, 2, 7],
+    [9, 4, 5, 3, 1, 2, 6, 8, 7, 0],
+    [4, 2, 8, 6, 5, 7, 3, 9, 0, 1],
+    [2, 7, 9, 3, 8, 0, 6, 4, 1, 5],
+    [7, 0, 4, 6, 9, 1, 3, 2, 5, 8]
+  ];
+  
+  let c = 0;
+  const digits = cleaned.split('').map(Number).reverse();
+  
+  for (let i = 0; i < digits.length; i++) {
+    c = d[c][p[i % 8][digits[i]]];
+  }
+  
+  return c === 0;
+};

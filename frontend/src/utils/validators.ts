@@ -1,10 +1,55 @@
 import { z } from 'zod';
 
-// Aadhaar validation (12 digits)
+// Aadhaar validation with enhanced Indian criteria
 export const aadhaarSchema = z
   .string()
-  .length(12, 'Aadhaar must be 12 digits')
-  .regex(/^\d{12}$/, 'Aadhaar must contain only digits');
+  .min(12, 'Aadhaar number is required')
+  .transform((val) => val.replace(/\s/g, '')) // Remove spaces
+  .refine((val) => val.length === 12, 'Aadhaar must be exactly 12 digits')
+  .refine((val) => /^\d{12}$/.test(val), 'Aadhaar must contain only digits')
+  .refine((val) => {
+    // Basic validation - first digit cannot be 0 or 1
+    return !val.startsWith('0') && !val.startsWith('1');
+  }, 'Invalid Aadhaar number format')
+  .refine((val) => {
+    // Check for repeated digits (like 000000000000 or 111111111111)
+    return !val.split('').every((digit, index, arr) => digit === arr[0]);
+  }, 'Aadhaar cannot have all identical digits')
+  .refine((val) => {
+    // Verhoeff algorithm check for Aadhaar validation
+    const d = [
+      [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+      [1, 2, 3, 4, 0, 6, 7, 8, 9, 5],
+      [2, 3, 4, 0, 1, 7, 8, 9, 5, 6],
+      [3, 4, 0, 1, 2, 8, 9, 5, 6, 7],
+      [4, 0, 1, 2, 3, 9, 5, 6, 7, 8],
+      [5, 9, 8, 7, 6, 0, 4, 3, 2, 1],
+      [6, 5, 9, 8, 7, 1, 0, 4, 3, 2],
+      [7, 6, 5, 9, 8, 2, 1, 0, 4, 3],
+      [8, 7, 6, 5, 9, 3, 2, 1, 0, 4],
+      [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]
+    ];
+    const p = [
+      [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+      [1, 5, 7, 6, 2, 8, 3, 0, 9, 4],
+      [5, 8, 0, 3, 7, 9, 6, 1, 4, 2],
+      [8, 9, 1, 6, 0, 4, 3, 5, 2, 7],
+      [9, 4, 5, 3, 1, 2, 6, 8, 7, 0],
+      [4, 2, 8, 6, 5, 7, 3, 9, 0, 1],
+      [2, 7, 9, 3, 8, 0, 6, 4, 1, 5],
+      [7, 0, 4, 6, 9, 1, 3, 2, 5, 8]
+    ];
+    const inv = [0, 4, 3, 2, 1, 5, 6, 7, 8, 9];
+    
+    let c = 0;
+    const digits = val.split('').map(Number).reverse();
+    
+    for (let i = 0; i < digits.length; i++) {
+      c = d[c][p[i % 8][digits[i]]];
+    }
+    
+    return c === 0;
+  }, 'Invalid Aadhaar number - checksum verification failed');
 
 // PAN validation (AAAAA0000A format)
 export const panSchema = z
@@ -24,16 +69,50 @@ export const phoneSchema = z
   .length(10, 'Phone number must be 10 digits')
   .regex(/^[6-9]\d{9}$/, 'Invalid Indian phone number');
 
-// Ration card validation (12 digits, optional)
+// Ration card validation with Indian standards (10-15 alphanumeric characters)
 export const rationSchema = z
   .string()
-  .length(12, 'Ration card number must be 12 digits')
-  .regex(/^\d{12}$/, 'Ration card must contain only digits')
+  .transform((val) => val.replace(/\s/g, '').toUpperCase()) // Remove spaces and convert to uppercase
+  .refine((val) => {
+    if (val === '') return true; // Optional field
+    return val.length >= 10 && val.length <= 15;
+  }, 'Ration card number must be 10-15 characters')
+  .refine((val) => {
+    if (val === '') return true; // Optional field
+    return /^[A-Z0-9]+$/.test(val);
+  }, 'Ration card number can only contain letters and numbers')
+  .refine((val) => {
+    if (val === '') return true; // Optional field
+    // Should start with state code (2 letters) followed by numbers/letters
+    return /^[A-Z]{2}[A-Z0-9]+$/.test(val);
+  }, 'Ration card number should start with 2-letter state code')
   .optional()
   .or(z.literal(''));
 
-// Email validation
-export const emailSchema = z.string().email('Invalid email address');
+// Enhanced email validation
+export const emailSchema = z
+  .string()
+  .min(1, 'Email is required')
+  .email('Invalid email address')
+  .regex(/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/, 'Please enter a valid email address')
+  .refine((email) => {
+    // Additional checks for email format
+    const parts = email.split('@');
+    if (parts.length !== 2) return false;
+    
+    const [localPart, domain] = parts;
+    
+    // Local part validation
+    if (localPart.length > 64) return false;
+    if (localPart.startsWith('.') || localPart.endsWith('.')) return false;
+    if (localPart.includes('..')) return false;
+    
+    // Domain validation
+    if (domain.length > 253) return false;
+    if (domain.startsWith('-') || domain.endsWith('-')) return false;
+    
+    return true;
+  }, 'Please enter a valid email address');
 
 // Password validation
 export const passwordSchema = z
@@ -62,9 +141,20 @@ export const loginSchema = z.object({
   password: z.string().min(1, 'Password is required'),
 });
 
+// Name validation - only characters and single spaces between words
+export const nameSchema = z
+  .string()
+  .min(2, 'Name must be at least 2 characters')
+  .max(50, 'Name cannot exceed 50 characters')
+  .regex(/^[a-zA-Z]+(?: [a-zA-Z]+)*$/, 'Name can only contain letters and single spaces between words')
+  .refine((name) => {
+    // Ensure no leading/trailing spaces and no multiple consecutive spaces
+    return name.trim() === name && !name.includes('  ');
+  }, 'Name cannot have leading/trailing spaces or multiple consecutive spaces');
+
 // Worker registration schema
 export const workerRegistrationSchema = z.object({
-  name: z.string().min(2, 'Name must be at least 2 characters'),
+  name: nameSchema,
   email: emailSchema,
   phone: phoneSchema,
   aadhaar: aadhaarSchema,
@@ -92,7 +182,7 @@ export const workerRegistrationSchema = z.object({
 
 // Employer registration schema
 export const employerRegistrationSchema = z.object({
-  name: z.string().min(2, 'Name must be at least 2 characters'),
+  name: nameSchema,
   businessName: z.string().min(2, 'Business name is required'),
   email: emailSchema,
   phone: phoneSchema,
