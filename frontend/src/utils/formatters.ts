@@ -68,8 +68,8 @@ export const formatPercentage = (value: number, decimals = 1): string => {
   return `${value >= 0 ? '+' : ''}${value.toFixed(decimals)}%`;
 };
 
-// Phone number formatter (Indian)
-export const formatPhoneNumber = (phone: string): string => {
+// Phone number formatter (Indian) — use formatPhoneNumber below for input formatting
+export const formatPhoneDisplay = (phone: string): string => {
   const cleaned = phone.replace(/\D/g, '');
   if (cleaned.length === 10) {
     return `+91 ${cleaned.slice(0, 5)} ${cleaned.slice(5)}`;
