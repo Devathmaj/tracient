@@ -35,6 +35,14 @@ export const rationSchema = z
 // Email validation
 export const emailSchema = z.string().email('Invalid email address');
 
+// Name validation (alphabets only, each word must start with a capital letter)
+export const nameSchema = z
+  .string()
+  .trim()
+  .min(2, 'Name must be at least 2 characters')
+  .regex(/^[A-Za-z]+(\s[A-Za-z]+)*$/, 'Name must contain only alphabets')
+  .regex(/^([A-Z][a-z]*(\s|$))+$/, 'Each word must start with a capital letter (e.g. John Doe)');
+
 // Password validation
 export const passwordSchema = z
   .string()
@@ -64,7 +72,7 @@ export const loginSchema = z.object({
 
 // Worker registration schema
 export const workerRegistrationSchema = z.object({
-  name: z.string().min(2, 'Name must be at least 2 characters'),
+  name: nameSchema,
   email: emailSchema,
   phone: phoneSchema,
   aadhaar: aadhaarSchema,
@@ -92,7 +100,7 @@ export const workerRegistrationSchema = z.object({
 
 // Employer registration schema
 export const employerRegistrationSchema = z.object({
-  name: z.string().min(2, 'Name must be at least 2 characters'),
+  name: nameSchema,
   businessName: z.string().min(2, 'Business name is required'),
   email: emailSchema,
   phone: phoneSchema,

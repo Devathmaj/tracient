@@ -45,6 +45,7 @@ const WorkerRegistrationForm: React.FC<{
     watch,
   } = useForm<WorkerFormData>({
     resolver: zodResolver(registerWorkerSchema),
+    mode: 'onChange',
     defaultValues: {
       employmentType: 'informal',
       isFarmer: false,
@@ -306,6 +307,7 @@ const EmployerRegistrationForm: React.FC<{
     formState: { errors },
   } = useForm<EmployerFormData>({
     resolver: zodResolver(registerEmployerSchema),
+    mode: 'onChange',
   });
 
   return (
