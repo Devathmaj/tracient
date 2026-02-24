@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom';
 import { 
   Users, 
   Wallet, 
-  TrendingUp, 
+  TrendingUp,
+  TrendingDown,
   Calendar,
   ArrowRight,
   Upload,
@@ -11,7 +12,8 @@ import {
   Plus,
   IndianRupee,
   Clock,
-  CheckCircle
+  CheckCircle,
+  Building2
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { 
@@ -23,62 +25,55 @@ import {
   Badge,
   Spinner,
   CustomAreaChart,
-  CustomBarChart,
-  CustomPieChart
+  CustomBarChart
 } from '@/components/common';
 import { formatCurrency, formatDate } from '@/utils/formatters';
 import { CHART_COLORS } from '@/utils/constants';
+import api from '@/services/api';
 
-const mockDashboardData = {
-  totalWorkers: 156,
-  activeWorkers: 142,
-  totalPayments: 4500000,
-  currentMonthPayroll: 850000,
-  pendingPayments: 12,
-  pendingAmount: 125000,
-  trend: 12.5,
-  monthlyPayrollTrend: [
-    { month: 'Jan', amount: 750000 },
-    { month: 'Feb', amount: 820000 },
-    { month: 'Mar', amount: 780000 },
-    { month: 'Apr', amount: 900000 },
-    { month: 'May', amount: 850000 },
-    { month: 'Jun', amount: 880000 },
-  ],
-  paymentsByCategory: [
-    { category: 'Daily Wage', amount: 2500000 },
-    { category: 'Contract', amount: 1200000 },
-    { category: 'Overtime', amount: 500000 },
-    { category: 'Bonus', amount: 300000 },
-  ],
-  workerDistribution: [
-    { name: 'Full-time', value: 85 },
-    { name: 'Part-time', value: 45 },
-    { name: 'Contract', value: 26 },
-  ],
-  recentPayments: [
-    { id: '1', worker: 'Rajesh Kumar', amount: 12500, date: '2024-06-15', status: 'completed' },
-    { id: '2', worker: 'Priya Sharma', amount: 8500, date: '2024-06-15', status: 'completed' },
-    { id: '3', worker: 'Mohammed Ali', amount: 15000, date: '2024-06-14', status: 'pending' },
-    { id: '4', worker: 'Lakshmi Devi', amount: 9000, date: '2024-06-14', status: 'completed' },
-    { id: '5', worker: 'Suresh Babu', amount: 11000, date: '2024-06-13', status: 'pending' },
-  ],
-  upcomingPayments: [
-    { id: '1', workers: 45, amount: 350000, dueDate: '2024-06-20' },
-    { id: '2', workers: 32, amount: 280000, dueDate: '2024-06-25' },
-  ],
-};
+interface DashboardData {
+  companyName: string;
+  totalWorkers: number;
+  activeWorkers: number;
+  totalPayments: number;
+  currentMonthPayroll: number;
+  yearlyPayments: number;
+  trend: number;
+  transactionCount: number;
+  monthlyPayrollTrend: Array<{ month: string; year: number; amount: number }>;
+  paymentsByCategory: Array<{ category: string; amount: number }>;
+  recentPayments: Array<{
+    id: string;
+    worker: string;
+    workerId: string;
+    amount: number;
+    date: string;
+    status: string;
+    description: string;
+    referenceNumber: string;
+  }>;
+  lastUpdated: string;
+}
 
 const EmployerDashboard: React.FC = () => {
   const { user } = useAuth();
-  const [data, setData] = useState(mockDashboardData);
+  const [data, setData] = useState<DashboardData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchData = async () => {
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      setData(mockDashboardData);
-      setIsLoading(false);
+      try {
+        setIsLoading(true);
+        const response = await api.get('/employers/profile/dashboard') as { data: DashboardData };
+        setData(response.data);
+        setError(null);
+      } catch (err) {
+        console.error('Failed to fetch dashboard data:', err);
+        setError('Failed to load dashboard data');
+      } finally {
+        setIsLoading(false);
+      }
     };
     fetchData();
   }, []);
@@ -91,7 +86,23 @@ const EmployerDashboard: React.FC = () => {
     );
   }
 
-  const stats = [
+  if (error || !data) {
+    return (
+      <div className="flex flex-col items-center justify-center h-96">
+        <p className="text-red-500 mb-4">{error || 'No data available'}</p>
+        <Button onClick={() => window.location.reload()}>Retry</Button>
+      </div>
+    );
+  }
+
+  const stats: Array<{
+    title: string;
+    value: string | number;
+    subtitle?: string;
+    trend?: number;
+    icon: React.ElementType;
+    color: string;
+  }> = [
     {
       title: 'Total Workers',
       value: data.totalWorkers,
@@ -114,10 +125,10 @@ const EmployerDashboard: React.FC = () => {
       color: 'success',
     },
     {
-      title: 'Pending Payments',
-      value: data.pendingPayments,
-      subtitle: formatCurrency(data.pendingAmount),
-      icon: Clock,
+      title: 'Yearly Payments',
+      value: formatCurrency(data.yearlyPayments),
+      subtitle: `${data.transactionCount} transactions`,
+      icon: Calendar,
       color: 'warning',
     },
   ];
@@ -161,16 +172,20 @@ const EmployerDashboard: React.FC = () => {
                   <div>
                     <p className="text-sm text-gray-500">{stat.title}</p>
                     <p className="text-2xl font-bold text-gray-900 mt-1">{stat.value}</p>
-                    {stat.trend && (
+                    {stat.trend !== undefined && stat.trend !== 0 && (
                       <div className="flex items-center gap-1 mt-2">
-                        <TrendingUp className="h-4 w-4 text-green-500" />
-                        <span className="text-sm font-medium text-green-600">
-                          {stat.trend}%
+                        {stat.trend > 0 ? (
+                          <TrendingUp className="h-4 w-4 text-green-500" />
+                        ) : (
+                          <TrendingDown className="h-4 w-4 text-red-500" />
+                        )}
+                        <span className={`text-sm font-medium ${stat.trend > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {Math.abs(stat.trend)}%
                         </span>
                         <span className="text-xs text-gray-500">vs last month</span>
                       </div>
                     )}
-                    {stat.subtitle && !stat.trend && (
+                    {stat.subtitle && (stat.trend === undefined || stat.trend === 0) && (
                       <p className="text-sm text-gray-500 mt-2">{stat.subtitle}</p>
                     )}
                   </div>
@@ -237,16 +252,22 @@ const EmployerDashboard: React.FC = () => {
         {/* Monthly Payroll Trend */}
         <Card>
           <CardHeader>
-            <CardTitle>Monthly Payroll Trend</CardTitle>
+            <CardTitle>Monthly Payroll Trend (Last 12 Months)</CardTitle>
           </CardHeader>
           <CardContent>
-            <CustomAreaChart
-              data={data.monthlyPayrollTrend.map(d => ({ name: d.month, amount: d.amount }))}
-              areas={[{ dataKey: 'amount', color: CHART_COLORS.array[0], name: 'Payroll' }]}
-              xAxisKey="name"
-              height={250}
-              showLegend={false}
-            />
+            {data.monthlyPayrollTrend.length > 0 ? (
+              <CustomAreaChart
+                data={data.monthlyPayrollTrend.map(d => ({ name: `${d.month} ${d.year}`, amount: d.amount }))}
+                areas={[{ dataKey: 'amount', color: CHART_COLORS.array[0], name: 'Payroll' }]}
+                xAxisKey="name"
+                height={250}
+                showLegend={false}
+              />
+            ) : (
+              <div className="h-[250px] flex items-center justify-center text-gray-500">
+                No payment data available
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -256,29 +277,62 @@ const EmployerDashboard: React.FC = () => {
             <CardTitle>Payments by Category</CardTitle>
           </CardHeader>
           <CardContent>
-            <CustomBarChart
-              data={data.paymentsByCategory.map(d => ({ name: d.category, amount: d.amount }))}
-              bars={[{ dataKey: 'amount', color: CHART_COLORS.array[1], name: 'Amount' }]}
-              xAxisKey="name"
-              height={250}
-              showLegend={false}
-            />
+            {data.paymentsByCategory.length > 0 ? (
+              <CustomBarChart
+                data={data.paymentsByCategory.map(d => ({ name: d.category, amount: d.amount }))}
+                bars={[{ dataKey: 'amount', color: CHART_COLORS.array[1], name: 'Amount' }]}
+                xAxisKey="name"
+                height={250}
+                showLegend={false}
+              />
+            ) : (
+              <div className="h-[250px] flex items-center justify-center text-gray-500">
+                No category data available
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
 
-      {/* Worker Distribution & Upcoming Payments */}
+      {/* Company Info & Recent Payments */}
       <div className="grid lg:grid-cols-3 gap-6">
-        {/* Worker Distribution */}
+        {/* Company Summary */}
         <Card>
           <CardHeader>
-            <CardTitle>Worker Distribution</CardTitle>
+            <CardTitle>Company Summary</CardTitle>
           </CardHeader>
-          <CardContent className="flex items-center justify-center">
-            <CustomPieChart
-              data={data.workerDistribution}
-              height={200}
-            />
+          <CardContent>
+            <div className="space-y-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-blue-100">
+                  <Building2 className="h-5 w-5 text-blue-600" />
+                </div>
+                <div>
+                  <p className="text-sm text-gray-500">Company</p>
+                  <p className="font-medium text-gray-900">{data.companyName}</p>
+                </div>
+              </div>
+              <div className="border-t pt-4 space-y-3">
+                <div className="flex justify-between">
+                  <span className="text-sm text-gray-500">Total Workers</span>
+                  <span className="font-medium">{data.totalWorkers}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-sm text-gray-500">Active Workers</span>
+                  <span className="font-medium text-green-600">{data.activeWorkers}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-sm text-gray-500">Total Transactions</span>
+                  <span className="font-medium">{data.transactionCount}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-sm text-gray-500">Avg. Payment</span>
+                  <span className="font-medium">
+                    {formatCurrency(data.transactionCount > 0 ? data.totalPayments / data.transactionCount : 0)}
+                  </span>
+                </div>
+              </div>
+            </div>
           </CardContent>
         </Card>
 
@@ -286,7 +340,7 @@ const EmployerDashboard: React.FC = () => {
         <Card className="lg:col-span-2">
           <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle>Recent Payments</CardTitle>
-            <Link to="/employer/payments">
+            <Link to="/employer/payment-history">
               <Button variant="ghost" size="sm">
                 View All
                 <ArrowRight className="ml-2 h-4 w-4" />
@@ -295,68 +349,49 @@ const EmployerDashboard: React.FC = () => {
           </CardHeader>
           <CardContent>
             <div className="space-y-3">
-              {data.recentPayments.map((payment) => (
-                <div
-                  key={payment.id}
-                  className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-primary-100 flex items-center justify-center">
-                      <span className="text-sm font-medium text-primary-700">
-                        {payment.worker.split(' ').map(n => n[0]).join('')}
-                      </span>
+              {data.recentPayments.length > 0 ? (
+                data.recentPayments.map((payment) => (
+                  <div
+                    key={payment.id}
+                    className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full bg-primary-100 flex items-center justify-center">
+                        <span className="text-sm font-medium text-primary-700">
+                          {payment.worker.split(' ').map(n => n[0]).join('').slice(0, 2)}
+                        </span>
+                      </div>
+                      <div>
+                        <p className="font-medium text-gray-900">{payment.worker}</p>
+                        <p className="text-xs text-gray-500">
+                          {formatDate(payment.date)} • {payment.description || 'Wage Payment'}
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <p className="font-medium text-gray-900">{payment.worker}</p>
-                      <p className="text-xs text-gray-500">{formatDate(payment.date)}</p>
+                    <div className="text-right">
+                      <p className="font-semibold text-gray-900">{formatCurrency(payment.amount)}</p>
+                      <Badge
+                        variant={payment.status === 'completed' ? 'success' : 'warning'}
+                        className="mt-1"
+                      >
+                        {payment.status === 'completed' ? (
+                          <><CheckCircle className="h-3 w-3 mr-1" /> Completed</>
+                        ) : (
+                          <><Clock className="h-3 w-3 mr-1" /> Pending</>
+                        )}
+                      </Badge>
                     </div>
                   </div>
-                  <div className="text-right">
-                    <p className="font-semibold text-gray-900">{formatCurrency(payment.amount)}</p>
-                    <Badge
-                      variant={payment.status === 'completed' ? 'success' : 'warning'}
-                      className="mt-1"
-                    >
-                      {payment.status === 'completed' ? (
-                        <><CheckCircle className="h-3 w-3 mr-1" /> Completed</>
-                      ) : (
-                        <><Clock className="h-3 w-3 mr-1" /> Pending</>
-                      )}
-                    </Badge>
-                  </div>
+                ))
+              ) : (
+                <div className="text-center py-8 text-gray-500">
+                  No payments recorded yet
                 </div>
-              ))}
+              )}
             </div>
           </CardContent>
         </Card>
       </div>
-
-      {/* Upcoming Payments Alert */}
-      {data.upcomingPayments.length > 0 && (
-        <Card className="border-l-4 border-l-blue-500 bg-blue-50">
-          <CardContent className="p-4">
-            <div className="flex items-start gap-3">
-              <Calendar className="h-5 w-5 text-blue-600 mt-0.5" />
-              <div className="flex-1">
-                <p className="font-medium text-blue-800">Upcoming Payment Schedule</p>
-                <div className="mt-2 space-y-2">
-                  {data.upcomingPayments.map((payment) => (
-                    <div key={payment.id} className="flex items-center justify-between text-sm">
-                      <span className="text-blue-700">
-                        {payment.workers} workers • Due {formatDate(payment.dueDate)}
-                      </span>
-                      <span className="font-medium text-blue-800">{formatCurrency(payment.amount)}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <Button size="sm" className="bg-blue-600 hover:bg-blue-700">
-                Process Payments
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
     </div>
   );
 };

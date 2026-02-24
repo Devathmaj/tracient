@@ -5,7 +5,6 @@ import {
   RefreshCw,
   CheckCircle,
   XCircle,
-  Clock,
   IndianRupee,
   Calendar,
   Heart
@@ -18,7 +17,6 @@ import {
   CardDescription,
   Button,
   Badge,
-  BPLBadge,
   Spinner,
   Alert,
   CustomPieChart
@@ -113,13 +111,13 @@ const BPLStatus: React.FC = () => {
       // Call the AI model to reclassify the family
       const result = await familyService.reclassifyFamily();
       
-      if (result.family) {
-        setFamily(result.family);
+      if (result.data?.family) {
+        setFamily(result.data.family);
         
         // Show success message with classification details
-        const classification = result.family.classification;
-        const confidence = result.family.classification_confidence || 0;
-        const reason = result.family.classification_reason || '';
+        const classification = result.data.family.classification;
+        const confidence = result.data.family.classification_confidence || 0;
+        const reason = result.data.family.classification_reason || '';
         
         setClassificationMessage(
           `Classification updated: ${classification} (${confidence}% confidence). ${reason}`
@@ -364,7 +362,7 @@ const BPLStatus: React.FC = () => {
             {family && family.eligible_schemes && family.eligible_schemes.length > 0 ? (
               <div className="flex flex-wrap gap-2">
                 {family.eligible_schemes.map((scheme, idx) => (
-                  <Badge key={idx} variant="info" className="text-sm px-3 py-1">
+                  <Badge key={idx} variant="primary" className="text-sm px-3 py-1">
                     {scheme}
                   </Badge>
                 ))}

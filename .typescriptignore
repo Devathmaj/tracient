@@ -1,0 +1,4 @@
+# Exclude backup directory from TypeScript checking
+_backup-welfare-eligibility/**
+backup-*/**
+_backup-*/**

@@ -1,0 +1,4 @@
+# VS Code ignore file
+_backup-welfare-eligibility/**
+backup-*/**
+_backup-*/**

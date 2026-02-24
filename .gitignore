@@ -323,5 +323,13 @@ known_hosts
 *.trace
 
 # ==========================================
+# Backup Files (Development Only)
+# ==========================================
+
+# Backup directories for development reference
+backup-*
+_backup-*
+
+# ==========================================
 # END
 # ==========================================
