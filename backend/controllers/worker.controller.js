@@ -6,11 +6,12 @@ import { generateIdHash } from '../utils/hash.util.js';
 import { calculateBPLStatus, calculateIncomeTrend } from '../utils/bpl.util.js';
 import { successResponse, createdResponse, errorResponse, notFoundResponse, paginatedResponse } from '../utils/response.util.js';
 import { paginateQuery } from '../utils/pagination.util.js';
-import { registerWorkerOnChain, updateWorkerClassification } from '../services/fabric.service.js';
+import { registerWorkerOnChain, updateWorkerClassification, recordUPITransaction } from '../services/fabric.service.js';
 import { classifyBPL } from '../services/ai.service.js';
 import { logger } from '../utils/logger.util.js';
 import { VERIFICATION_STATUS, ROLES } from '../config/constants.js';
 import { isBlockchainEnabled, logBlockchainSkip } from '../config/blockchain.config.js';
+import { generateReferenceNumber } from '../utils/hash.util.js';
 
 /**
  * Create a new worker
@@ -1262,6 +1263,45 @@ export const depositViaQR = async (req, res) => {
       amount: amount,
       receiverAccount: receiverAccount.accountNumber.slice(-4)
     });
+
+    // Record on blockchain
+    let blockchainResult = { success: false };
+    if (isBlockchainEnabled()) {
+      const transactionRef = generateReferenceNumber('QR');
+      
+      blockchainResult = await recordUPITransaction({
+        txId: transactionId,
+        workerIdHash: workerIdHash,
+        employerIdHash: payerIdHash || null,
+        amount: amount,
+        senderName: sender.name || payerName || 'Anonymous',
+        senderPhone: payerPhone || sender.phone || '',
+        senderUPI: '',
+        transactionRef: transactionRef,
+        paymentMethod: 'QR_CODE'
+      });
+
+      if (blockchainResult.success) {
+        // Update receiver's UPI transaction with blockchain info
+        receiverTransaction.blockchainTxId = blockchainResult.txId;
+        receiverTransaction.verifiedOnChain = true;
+        await receiverTransaction.save();
+
+        logger.info('✓ QR Payment recorded on blockchain', {
+          txId: transactionId,
+          workerName: receiver.name,
+          senderName: sender.name,
+          amount
+        });
+      } else {
+        logger.warn('⚠ Blockchain recording failed for QR payment', {
+          txId: transactionId,
+          error: blockchainResult.error
+        });
+      }
+    } else {
+      logBlockchainSkip('RecordUPITransaction (QR)', logger);
+    }
 
     return successResponse(res, {
       transactionId: transactionId,

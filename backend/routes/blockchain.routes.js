@@ -775,16 +775,18 @@ router.get(
   asyncHandler(async (req, res) => {
     const { limit = 100 } = req.query;
     
-    // Read from blockchain log file
     const fs = await import('fs').then(m => m.promises);
     const path = await import('path');
     
-    const today = new Date().toISOString().split('T')[0];
-    const logPath = path.join(process.cwd(), 'logs', `blockchain-${today}.log`);
-    
     let logs = [];
+    let logSource = '';
+    
+    // Try dedicated blockchain log file first
+    const today = new Date().toISOString().split('T')[0];
+    const blockchainLogPath = path.join(process.cwd(), 'logs', `blockchain-${today}.log`);
+    
     try {
-      const content = await fs.readFile(logPath, 'utf-8');
+      const content = await fs.readFile(blockchainLogPath, 'utf-8');
       logs = content
         .split('\n')
         .filter(line => line.trim())
@@ -796,16 +798,127 @@ router.get(
             return { raw: line };
           }
         });
-    } catch (error) {
-      // Log file might not exist yet
-      logger.warn(`[Blockchain Test] Could not read log file: ${error.message}`);
+      logSource = blockchainLogPath;
+    } catch {
+      // Fall back to combined.log filtered for blockchain-related entries
+      try {
+        const combinedLogPath = path.join(process.cwd(), 'logs', 'combined.log');
+        const content = await fs.readFile(combinedLogPath, 'utf-8');
+        const blockchainKeywords = /blockchain|Fabric|chaincode|UPI transaction recorded|Payment recorded|RecordWage|RecordUPI|InitLedger|Blockchain Test|syncedToBlockchain|verifiedOnChain/i;
+        
+        logs = content
+          .split('\n')
+          .filter(line => line.trim() && blockchainKeywords.test(line))
+          .slice(-parseInt(limit))
+          .map(line => {
+            // Parse structured log lines: "2026-03-01 22:10:41 [INFO]: message {metadata}"
+            const match = line.match(/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \[(\w+)\]: (.+)$/);
+            if (match) {
+              return { timestamp: match[1], level: match[2].toLowerCase(), message: match[3] };
+            }
+            return { raw: line };
+          });
+        logSource = combinedLogPath + ' (filtered)';
+      } catch (innerError) {
+        logger.warn(`[Blockchain Test] Could not read any log file: ${innerError.message}`);
+        logSource = 'none';
+      }
     }
 
     return successResponse(res, {
       logs,
-      logFile: logPath,
+      logFile: logSource,
       count: logs.length
     }, 'Logs retrieved');
+  })
+);
+
+/**
+ * @route GET /api/blockchain/test/transactions
+ * @desc Get all transactions that are recorded on the blockchain
+ * @access Private (Admin only)
+ */
+router.get(
+  '/test/transactions',
+  authenticate,
+  adminOnly,
+  asyncHandler(async (req, res) => {
+    const { page = 1, limit = 50, status = 'all' } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    
+    // Import UPITransaction model
+    const { UPITransaction } = await import('../models/index.js');
+    
+    // Only query UPITransaction - this is the single source of truth for payments
+    // WageRecord is for income tracking, not for blockchain transaction display
+    const upiQuery = { verifiedOnChain: true };
+    if (status === 'pending') {
+      upiQuery.verifiedOnChain = false;
+    }
+    
+    const total = await UPITransaction.countDocuments(upiQuery);
+    const upiTransactions = await UPITransaction.find(upiQuery)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .populate('workerId', 'name idHash')
+      .lean();
+
+    // Format transactions with sender and recipient info
+    const transactions = upiTransactions.map(tx => ({
+      id: tx._id,
+      type: tx.mode === 'QR_SCAN' ? 'QR' : 'UPI',
+      txId: tx.blockchainTxId || tx.txId,
+      amount: tx.amount,
+      currency: tx.currency || 'INR',
+      // Sender (who paid)
+      senderName: tx.senderName || 'Unknown',
+      senderPhone: tx.senderPhone || '',
+      senderAccount: tx.senderAccount || '',
+      // Recipient (who received)
+      recipientName: tx.workerName || tx.workerId?.name || 'Unknown',
+      recipientIdHash: tx.workerHash,
+      recipientAccount: tx.workerAccount || '',
+      // Payment details
+      paymentMethod: tx.mode || 'UPI',
+      status: tx.status,
+      blockchainTxId: tx.blockchainTxId,
+      verifiedOnChain: tx.verifiedOnChain,
+      transactionRef: tx.transactionRef,
+      remarks: tx.remarks || '',
+      createdAt: tx.createdAt,
+      completedAt: tx.completedAt
+    }));
+
+    // Summary stats
+    const totalOnChain = await UPITransaction.countDocuments({ verifiedOnChain: true });
+    const totalAll = await UPITransaction.countDocuments({});
+    const totalPending = totalAll - totalOnChain;
+
+    // Total amount on chain
+    const amountAgg = await UPITransaction.aggregate([
+      { $match: { verifiedOnChain: true } },
+      { $group: { _id: null, total: { $sum: '$amount' } } }
+    ]);
+    const totalAmountOnChain = amountAgg[0]?.total || 0;
+
+    return successResponse(res, {
+      transactions,
+      summary: {
+        totalOnChain,
+        totalTransactions: totalAll,
+        totalPending,
+        totalAmountOnChain,
+        syncRate: totalAll > 0 
+          ? ((totalOnChain / totalAll) * 100).toFixed(1) + '%' 
+          : '0%'
+      },
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total
+      }
+    }, 'Blockchain transactions retrieved');
   })
 );
 

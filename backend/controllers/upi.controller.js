@@ -154,6 +154,15 @@ export const processUPIPayment = async (req, res) => {
       return notFoundResponse(res, 'Worker not found');
     }
     
+    // Get employer info if user is an employer
+    let employer = null;
+    let employerIdHash = null;
+    if (req.user.role === 'employer') {
+      const { Employer } = await import('../models/index.js');
+      employer = await Employer.findOne({ userId: req.user.id });
+      employerIdHash = employer?.idHash;
+    }
+    
     // Validate QR token if provided
     if (qrToken) {
       const validation = await validateQRToken(qrToken);
@@ -171,16 +180,17 @@ export const processUPIPayment = async (req, res) => {
     const txId = `UPI${Date.now()}${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
     const transactionRef = generateReferenceNumber('UPI');
     
-    // Create UPI transaction
+    // Create UPI transaction with employer tracking
     const upiTransaction = await UPITransaction.create({
       txId,
       workerId: worker._id,
+      employerId: employer?._id,
       workerHash: workerIdHash,
       workerName: worker.name,
       workerAccount: worker.bankAccount,
       workerUPI: worker.upiId,
       amount,
-      senderName,
+      senderName: employer?.companyName || senderName,
       senderPhone,
       senderUPI,
       transactionRef,
@@ -193,10 +203,12 @@ export const processUPIPayment = async (req, res) => {
       }
     });
     
-    // Create wage record
+    // Create wage record with employer tracking
     const wageRecord = await WageRecord.create({
       workerId: worker._id,
       workerIdHash,
+      employerId: employer?._id,
+      employerIdHash: employerIdHash,
       amount,
       paymentMethod: 'upi',
       referenceNumber: transactionRef,
@@ -204,8 +216,14 @@ export const processUPIPayment = async (req, res) => {
       upiTransactionId: upiTransaction._id,
       status: PAYMENT_STATUS.PENDING,
       source: qrToken ? 'qr_scan' : 'manual',
-      incomeSource: senderName || 'UPI Payment',
-      isVerified: false
+      incomeSource: employer?.companyName || senderName || 'UPI Payment',
+      isVerified: false,
+      metadata: {
+        senderName: employer?.companyName || senderName,
+        senderPhone: senderPhone,
+        senderUPI: senderUPI,
+        paymentMode: qrToken ? 'QR_SCAN' : 'UPI_DIRECT'
+      }
     });
     
     // Simulate payment processing (in production, integrate with UPI gateway)
@@ -214,22 +232,36 @@ export const processUPIPayment = async (req, res) => {
     upiTransaction.completedAt = new Date();
     upiTransaction.upiRef = `UPI${Date.now()}`;
     
-    // Record on blockchain - Use dedicated UPI transaction function
+    // Record on blockchain with complete transaction details
     let blockchainResult = { success: false };
     if (isBlockchainEnabled()) {
-      // Record as UPI transaction on blockchain
+      // Record UPI transaction on blockchain with all details
       blockchainResult = await recordUPITransaction({
         txId: txId,
-        workerIdHash,
-        amount,
-        senderName: senderName || 'Anonymous',
-        senderPhone: senderPhone || '',
-        timestamp: new Date().toISOString()
+        workerIdHash: workerIdHash,
+        employerIdHash: employerIdHash,
+        amount: amount,
+        senderName: employer?.companyName || senderName || 'Anonymous',
+        senderPhone: senderPhone || employer?.phone || '',
+        senderUPI: senderUPI || '',
+        transactionRef: transactionRef,
+        paymentMethod: qrToken ? 'QR_CODE' : 'UPI'
       });
       
       if (blockchainResult.success) {
         upiTransaction.blockchainTxId = blockchainResult.txId;
         upiTransaction.verifiedOnChain = true;
+        logger.info('✓ Payment recorded on blockchain', { 
+          txId, 
+          workerName: worker.name,
+          senderName: employer?.companyName || senderName,
+          amount 
+        });
+      } else {
+        logger.warn('⚠ Blockchain recording failed, transaction saved to database only', {
+          txId,
+          error: blockchainResult.error
+        });
       }
     } else {
       logBlockchainSkip('RecordUPITransaction', logger);
@@ -253,10 +285,13 @@ export const processUPIPayment = async (req, res) => {
       await useQRToken(qrToken, req.user?.id, upiTransaction._id);
     }
     
-    logger.info('UPI payment processed', { 
+    logger.info('UPI payment processed successfully', { 
       txId, 
-      amount, 
-      workerIdHash: workerIdHash.substring(0, 8) 
+      amount,
+      workerName: worker.name,
+      senderName: employer?.companyName || senderName,
+      workerIdHash: workerIdHash.substring(0, 8),
+      blockchainRecorded: blockchainResult.success
     });
     
     return createdResponse(res, {
@@ -266,10 +301,17 @@ export const processUPIPayment = async (req, res) => {
         amount,
         status: upiTransaction.status,
         workerName: worker.name,
+        senderName: employer?.companyName || senderName,
         blockchainTxId: upiTransaction.blockchainTxId,
+        verifiedOnChain: upiTransaction.verifiedOnChain,
         timestamp: upiTransaction.completedAt
+      },
+      blockchain: {
+        recorded: blockchainResult.success,
+        txId: blockchainResult.txId,
+        mock: blockchainResult.mock || false
       }
-    }, 'Payment successful');
+    }, blockchainResult.success ? 'Payment successful and recorded on blockchain' : 'Payment successful (database only)');
     
   } catch (error) {
     logger.error('Process UPI payment error:', error);

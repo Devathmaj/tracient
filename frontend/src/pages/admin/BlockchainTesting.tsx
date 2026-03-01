@@ -21,7 +21,11 @@ import {
   Server,
   Link,
   Zap,
-  Shield
+  Shield,
+  List,
+  IndianRupee,
+  ArrowLeft,
+  ArrowRight
 } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardContent, Button, Spinner, Badge, Alert, Tabs } from '../../components/common';
 import { get, post } from '../../services/api';
@@ -83,6 +87,42 @@ interface LogEntry {
   raw?: string;
 }
 
+interface BlockchainTransaction {
+  id: string;
+  type: 'QR' | 'UPI';
+  txId: string;
+  amount: number;
+  currency: string;
+  senderName: string;
+  senderPhone: string;
+  senderAccount: string;
+  recipientName: string;
+  recipientIdHash: string;
+  recipientAccount: string;
+  paymentMethod: string;
+  status: string;
+  blockchainTxId: string;
+  verifiedOnChain: boolean;
+  transactionRef: string;
+  remarks: string;
+  createdAt: string;
+  completedAt: string;
+}
+
+interface TransactionSummary {
+  totalOnChain: number;
+  totalTransactions: number;
+  totalPending: number;
+  totalAmountOnChain: number;
+  syncRate: string;
+}
+
+interface TransactionsData {
+  transactions: BlockchainTransaction[];
+  summary: TransactionSummary;
+  pagination: { page: number; limit: number; total: number };
+}
+
 const BlockchainTesting: React.FC = () => {
   // State
   const [activeTab, setActiveTab] = useState('connection');
@@ -98,6 +138,9 @@ const BlockchainTesting: React.FC = () => {
   const [executing, setExecuting] = useState(false);
   const [testingConnection, setTestingConnection] = useState(false);
   const [expandedFunctions, setExpandedFunctions] = useState<Set<string>>(new Set());
+  const [transactionsData, setTransactionsData] = useState<TransactionsData | null>(null);
+  const [txPage, setTxPage] = useState(1);
+  const [loadingTransactions, setLoadingTransactions] = useState(false);
 
   // Fetch functions and config
   const fetchFunctions = useCallback(async () => {
@@ -136,6 +179,19 @@ const BlockchainTesting: React.FC = () => {
       console.error('Failed to fetch logs:', error);
     }
   };
+
+  // Fetch blockchain transactions
+  const fetchTransactions = useCallback(async (page = 1) => {
+    try {
+      setLoadingTransactions(true);
+      const response = await get<any>(`/blockchain/test/transactions?page=${page}&limit=25`);
+      setTransactionsData(response.data);
+    } catch (error) {
+      console.error('Failed to fetch transactions:', error);
+    } finally {
+      setLoadingTransactions(false);
+    }
+  }, []);
 
   // Execute function
   const executeFunction = async (fn: ChaincodeFunction, type: 'read' | 'write') => {
@@ -222,12 +278,20 @@ const BlockchainTesting: React.FC = () => {
     return () => clearInterval(interval);
   }, [fetchFunctions]);
 
+  // Auto-load transactions when Transactions tab is selected
+  useEffect(() => {
+    if (activeTab === 'transactions' && !transactionsData && !loadingTransactions) {
+      fetchTransactions(1);
+    }
+  }, [activeTab, transactionsData, loadingTransactions, fetchTransactions]);
+
   // Tabs
   const tabs = [
     { id: 'connection', label: 'Connection', icon: Link },
     { id: 'functions', label: 'Functions', icon: Zap },
     { id: 'execution', label: 'Execution History', icon: Clock },
     { id: 'logs', label: 'Logs', icon: Terminal },
+    { id: 'transactions', label: 'Transactions', icon: List },
     { id: 'identity', label: 'Identity', icon: Shield }
   ];
 
@@ -721,6 +785,230 @@ const BlockchainTesting: React.FC = () => {
               </div>
             </CardContent>
           </Card>
+        )}
+
+        {/* Transactions Tab */}
+        {activeTab === 'transactions' && (
+          <div className="space-y-4">
+            {/* Transaction Summary Cards */}
+            {transactionsData?.summary && (
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <Card>
+                  <CardContent className="p-4">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 bg-green-100 rounded-lg">
+                        <CheckCircle className="w-5 h-5 text-green-600" />
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-500">On Chain</p>
+                        <p className="text-xl font-bold text-green-700">{transactionsData.summary.totalOnChain}</p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="p-4">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 bg-blue-100 rounded-lg">
+                        <IndianRupee className="w-5 h-5 text-blue-600" />
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-500">Total Amount</p>
+                        <p className="text-xl font-bold text-blue-700">
+                          ₹{transactionsData.summary.totalAmountOnChain.toLocaleString('en-IN')}
+                        </p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="p-4">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 bg-yellow-100 rounded-lg">
+                        <Clock className="w-5 h-5 text-yellow-600" />
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-500">Pending Sync</p>
+                        <p className="text-xl font-bold text-yellow-700">{transactionsData.summary.totalPending}</p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="p-4">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 bg-indigo-100 rounded-lg">
+                        <Activity className="w-5 h-5 text-indigo-600" />
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-500">Sync Rate</p>
+                        <p className="text-xl font-bold text-indigo-700">{transactionsData.summary.syncRate}</p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+            )}
+
+            {/* Filters & Refresh */}
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle>Blockchain Transactions</CardTitle>
+                  <div className="flex items-center gap-3">
+                    <Button variant="outline" size="sm" onClick={() => fetchTransactions(txPage)} disabled={loadingTransactions}>
+                      {loadingTransactions ? <Spinner size="sm" className="mr-2" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+                      Refresh
+                    </Button>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {loadingTransactions && !transactionsData ? (
+                  <div className="flex items-center justify-center py-12">
+                    <Spinner size="lg" />
+                  </div>
+                ) : !transactionsData || transactionsData.transactions.length === 0 ? (
+                  <div className="text-center py-12">
+                    <Database className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+                    <p className="text-gray-500">No blockchain transactions found</p>
+                    <Button variant="outline" size="sm" className="mt-3" onClick={() => fetchTransactions(1)}>
+                      Load Transactions
+                    </Button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b bg-gray-50">
+                            <th className="text-left p-3 font-medium text-gray-600">Type</th>
+                            <th className="text-left p-3 font-medium text-gray-600">TX ID</th>
+                            <th className="text-left p-3 font-medium text-gray-600">Sender</th>
+                            <th className="text-left p-3 font-medium text-gray-600">Recipient</th>
+                            <th className="text-right p-3 font-medium text-gray-600">Amount</th>
+                            <th className="text-center p-3 font-medium text-gray-600">Status</th>
+                            <th className="text-center p-3 font-medium text-gray-600">On Chain</th>
+                            <th className="text-left p-3 font-medium text-gray-600">Date</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y">
+                          {transactionsData.transactions.map((tx) => (
+                            <tr key={tx.id} className="hover:bg-gray-50">
+                              <td className="p-3">
+                                <Badge variant={tx.type === 'QR' ? 'warning' : 'primary'}>
+                                  {tx.type}
+                                </Badge>
+                              </td>
+                              <td className="p-3">
+                                <div className="flex items-center gap-1">
+                                  <span className="font-mono text-xs truncate max-w-[120px]" title={tx.blockchainTxId || tx.txId}>
+                                    {(tx.blockchainTxId || tx.txId || '').slice(0, 16)}...
+                                  </span>
+                                  <button
+                                    onClick={() => copyToClipboard(tx.blockchainTxId || tx.txId)}
+                                    className="p-1 hover:bg-gray-200 rounded"
+                                    title="Copy full TX ID"
+                                  >
+                                    <Copy className="w-3 h-3 text-gray-400" />
+                                  </button>
+                                </div>
+                              </td>
+                              <td className="p-3">
+                                <p className="font-medium text-gray-700">{tx.senderName}</p>
+                                {tx.senderPhone && (
+                                  <p className="text-xs text-gray-400">{tx.senderPhone}</p>
+                                )}
+                              </td>
+                              <td className="p-3">
+                                <div>
+                                  <p className="font-medium">{tx.recipientName}</p>
+                                  <p className="text-xs text-gray-400 font-mono truncate max-w-[100px]" title={tx.recipientIdHash}>
+                                    {tx.recipientIdHash?.slice(0, 10)}...
+                                  </p>
+                                </div>
+                              </td>
+                              <td className="p-3 text-right font-semibold">
+                                ₹{tx.amount?.toLocaleString('en-IN')}
+                              </td>
+                              <td className="p-3 text-center">
+                                <Badge
+                                  variant={
+                                    tx.status === 'completed' || tx.status === 'SUCCESS'
+                                      ? 'success'
+                                      : tx.status === 'pending'
+                                      ? 'warning'
+                                      : 'error'
+                                  }
+                                >
+                                  {tx.status}
+                                </Badge>
+                              </td>
+                              <td className="p-3 text-center">
+                                {tx.verifiedOnChain ? (
+                                  <CheckCircle className="w-5 h-5 text-green-500 mx-auto" />
+                                ) : (
+                                  <XCircle className="w-5 h-5 text-gray-300 mx-auto" />
+                                )}
+                              </td>
+                              <td className="p-3 text-xs text-gray-500">
+                                {new Date(tx.createdAt).toLocaleDateString('en-IN', {
+                                  day: '2-digit',
+                                  month: 'short',
+                                  year: 'numeric'
+                                })}
+                                <br />
+                                {new Date(tx.createdAt).toLocaleTimeString('en-IN', {
+                                  hour: '2-digit',
+                                  minute: '2-digit'
+                                })}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Pagination */}
+                    {transactionsData.pagination.total > transactionsData.pagination.limit && (
+                      <div className="flex items-center justify-between mt-4 pt-4 border-t">
+                        <p className="text-sm text-gray-500">
+                          Showing {((txPage - 1) * 25) + 1}-{Math.min(txPage * 25, transactionsData.pagination.total)} of {transactionsData.pagination.total}
+                        </p>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={txPage <= 1}
+                            onClick={() => {
+                              const newPage = txPage - 1;
+                              setTxPage(newPage);
+                              fetchTransactions(newPage);
+                            }}
+                          >
+                            <ArrowLeft className="w-4 h-4" />
+                          </Button>
+                          <span className="text-sm text-gray-600">Page {txPage}</span>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={txPage * 25 >= transactionsData.pagination.total}
+                            onClick={() => {
+                              const newPage = txPage + 1;
+                              setTxPage(newPage);
+                              fetchTransactions(newPage);
+                            }}
+                          >
+                            <ArrowRight className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </CardContent>
+            </Card>
+          </div>
         )}
 
         {/* Identity Tab */}

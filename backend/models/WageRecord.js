@@ -20,6 +20,10 @@ const wageRecordSchema = new mongoose.Schema({
     required: true,
     index: true
   },
+  employerIdHash: {
+    type: String,
+    index: true
+  },
   
   // Transaction Details
   amount: {
@@ -98,6 +102,12 @@ const wageRecordSchema = new mongoose.Schema({
   completedAt: Date,
   failedAt: Date,
   failureReason: String,
+  
+  // Additional payment metadata
+  metadata: {
+    type: mongoose.Schema.Types.Mixed,
+    default: {}
+  },
   
   // Source
   source: {

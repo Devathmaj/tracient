@@ -545,10 +545,21 @@ export const checkPovertyStatus = async (workerIdHash, state = 'DEFAULT', startD
 
 /**
  * Record UPI transaction on blockchain
+ * Chaincode signature: RecordUPITransaction(txID, workerIDHash, amount, currency, senderName, senderPhone, transactionRef, paymentMethod)
  */
 export const recordUPITransaction = async (upiData) => {
   try {
-    const { txId, workerIdHash, amount, senderName, senderPhone, timestamp } = upiData;
+    const { 
+      txId, 
+      workerIdHash, 
+      employerIdHash,
+      amount, 
+      senderName, 
+      senderPhone, 
+      senderUPI,
+      transactionRef,
+      paymentMethod 
+    } = upiData;
     
     if (!isFabricConnected()) {
       logger.warn('Blockchain not connected - UPI transaction in mock mode');
@@ -559,20 +570,27 @@ export const recordUPITransaction = async (upiData) => {
       };
     }
 
+    // Match chaincode signature exactly
     const result = await submitTransaction(
       'RecordUPITransaction',
-      txId || `UPI-${Date.now()}`,
-      workerIdHash,
-      amount.toString(),
-      'INR',
-      senderName || 'Unknown',
-      senderPhone || '',
-      txId || '',
-      timestamp || new Date().toISOString(),
-      'UPI'
+      txId,                              // txID
+      workerIdHash,                      // workerIDHash
+      amount.toString(),                 // amount (as string for gRPC)
+      'INR',                             // currency
+      senderName || 'Unknown Sender',    // senderName
+      senderPhone || '',                 // senderPhone
+      transactionRef || txId,            // transactionRef
+      paymentMethod || 'UPI'             // paymentMethod
     );
     
-    logger.info('UPI transaction recorded on blockchain', { txId, workerIdHash });
+    logger.info('UPI transaction recorded on blockchain', { 
+      txId, 
+      workerIdHash, 
+      amount,
+      senderName,
+      employerIdHash: employerIdHash?.substring(0, 8)
+    });
+    
     return { success: true, txId, result };
   } catch (error) {
     logger.error('Failed to record UPI transaction:', error.message);
