@@ -11,6 +11,81 @@ import { logger } from '../utils/logger.util.js';
 import { VERIFICATION_STATUS, INCOME_CATEGORIES } from '../config/constants.js';
 import * as policyScreeningService from '../services/policyScreening.service.js';
 
+// ============================================================================
+// Eligibility Evaluation Helper
+// ============================================================================
+
+/**
+ * Evaluate all active workers against all active schemes and update:
+ *  - Worker.eligibleSchemes (list of scheme codes the worker qualifies for)
+ *  - WelfareScheme.currentBeneficiaries (count of eligible workers per scheme)
+ *
+ * Called after scheme create / update / delete.
+ */
+const evaluateEligibilityForAllSchemes = async () => {
+  try {
+    const activeSchemes = await WelfareScheme.find({ status: 'active' });
+    const workers = await Worker.find({ isActive: true });
+
+    // Map: schemeId -> count of eligible workers
+    const beneficiaryCounts = {};
+    activeSchemes.forEach(s => { beneficiaryCounts[s._id.toString()] = 0; });
+
+    // Bulk ops arrays
+    const workerBulkOps = [];
+
+    for (const worker of workers) {
+      const eligibleCodes = [];
+
+      for (const scheme of activeSchemes) {
+        const result = scheme.checkEligibility(worker);
+        if (result.eligible) {
+          eligibleCodes.push(scheme.code);
+          beneficiaryCounts[scheme._id.toString()]++;
+        }
+      }
+
+      // Only write if the list actually changed
+      const currentCodes = (worker.eligibleSchemes || []).slice().sort();
+      const newCodes = eligibleCodes.slice().sort();
+      if (JSON.stringify(currentCodes) !== JSON.stringify(newCodes)) {
+        workerBulkOps.push({
+          updateOne: {
+            filter: { _id: worker._id },
+            update: { $set: { eligibleSchemes: eligibleCodes } }
+          }
+        });
+      }
+    }
+
+    // Bulk update workers
+    if (workerBulkOps.length > 0) {
+      await Worker.bulkWrite(workerBulkOps);
+    }
+
+    // Bulk update beneficiary counts on schemes
+    const schemeBulkOps = activeSchemes.map(s => ({
+      updateOne: {
+        filter: { _id: s._id },
+        update: { $set: { currentBeneficiaries: beneficiaryCounts[s._id.toString()] } }
+      }
+    }));
+    if (schemeBulkOps.length > 0) {
+      await WelfareScheme.bulkWrite(schemeBulkOps);
+    }
+
+    // Also clear eligibility for any closed/deleted schemes that may still be on workers
+    // (handled by the fact that we only matched active schemes above)
+
+    logger.info(`Eligibility evaluation complete: ${workers.length} workers across ${activeSchemes.length} active schemes, ${workerBulkOps.length} workers updated`);
+
+    return { workersEvaluated: workers.length, schemesEvaluated: activeSchemes.length, workersUpdated: workerBulkOps.length };
+  } catch (error) {
+    logger.error('Eligibility evaluation error:', error);
+    throw error;
+  }
+};
+
 /**
  * Get dashboard statistics
  */
@@ -336,6 +411,299 @@ export const checkSchemeEligibility = async (req, res) => {
     
   } catch (error) {
     logger.error('Check scheme eligibility error:', error);
+    return errorResponse(res, error.message, 500);
+  }
+};
+
+/**
+ * Create a new welfare scheme
+ */
+export const createWelfareScheme = async (req, res) => {
+  try {
+    const {
+      name,
+      code,
+      description,
+      category,
+      eligibilityCriteria,
+      benefits,
+      totalBudget,
+      allocatedBudget,
+      maxBeneficiaries,
+      startDate,
+      endDate,
+      enrollmentStartDate,
+      enrollmentEndDate,
+      status,
+      requiredDocuments,
+      ministry,
+      department,
+      implementingAgency,
+      helplineNumber,
+      email,
+      website
+    } = req.body;
+
+    // Check if code already exists
+    const existing = await WelfareScheme.findOne({ code: code?.toUpperCase() });
+    if (existing) {
+      return errorResponse(res, 'Scheme code already exists', 400);
+    }
+
+    const scheme = new WelfareScheme({
+      name,
+      code: code?.toUpperCase(),
+      description,
+      category,
+      eligibilityCriteria: {
+        incomeCategory: eligibilityCriteria?.incomeCategory || 'BPL',
+        maxAnnualIncome: eligibilityCriteria?.maxAnnualIncome,
+        minAge: eligibilityCriteria?.minAge,
+        maxAge: eligibilityCriteria?.maxAge,
+        gender: eligibilityCriteria?.gender || 'all',
+        occupations: eligibilityCriteria?.occupations || [],
+        states: eligibilityCriteria?.states || [],
+        districts: eligibilityCriteria?.districts || [],
+        customCriteria: eligibilityCriteria?.customCriteria
+      },
+      benefits: {
+        type: benefits?.type || 'cash',
+        amount: benefits?.amount || 0,
+        frequency: benefits?.frequency || 'monthly',
+        description: benefits?.description || ''
+      },
+      totalBudget: totalBudget || 0,
+      allocatedBudget: allocatedBudget || totalBudget || 0,
+      maxBeneficiaries,
+      startDate: startDate ? new Date(startDate) : new Date(),
+      endDate: endDate ? new Date(endDate) : null,
+      enrollmentStartDate: enrollmentStartDate ? new Date(enrollmentStartDate) : null,
+      enrollmentEndDate: enrollmentEndDate ? new Date(enrollmentEndDate) : null,
+      status: status || 'draft',
+      requiredDocuments: requiredDocuments || [],
+      ministry,
+      department,
+      implementingAgency,
+      helplineNumber,
+      email,
+      website,
+      createdBy: req.user._id,
+      lastModifiedBy: req.user._id
+    });
+
+    await scheme.save();
+
+    // Log the action
+    await AuditLog.create({
+      userId: req.user._id,
+      action: 'welfare_scheme_created',
+      category: 'scheme',
+      resourceType: 'welfare_scheme',
+      resourceId: scheme._id,
+      resourceName: scheme.name,
+      description: `Created welfare scheme: ${scheme.name} (${scheme.code})`,
+      metadata: {
+        schemeCode: scheme.code,
+        category: scheme.category,
+        incomeCategory: scheme.eligibilityCriteria.incomeCategory,
+        status: scheme.status
+      },
+      success: true
+    });
+
+    logger.info(`Welfare scheme created: ${scheme.code} by user ${req.user._id}`);
+
+    // Evaluate eligibility for all workers against all active schemes
+    let eligibilityResult = null;
+    try {
+      eligibilityResult = await evaluateEligibilityForAllSchemes();
+      logger.info(`Post-create eligibility evaluation: ${eligibilityResult.workersUpdated} workers updated`);
+    } catch (evalErr) {
+      logger.error('Non-fatal: eligibility evaluation failed after scheme creation:', evalErr);
+    }
+
+    // Reload scheme to get updated beneficiary count
+    const updatedScheme = await WelfareScheme.findById(scheme._id);
+
+    return successResponse(res, {
+      ...updatedScheme.toJSON(),
+      eligibilityResult
+    }, 'Welfare scheme created successfully', 201);
+
+  } catch (error) {
+    logger.error('Create welfare scheme error:', error);
+    return errorResponse(res, error.message, 500);
+  }
+};
+
+/**
+ * Update an existing welfare scheme
+ */
+export const updateWelfareScheme = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updates = req.body;
+
+    const scheme = await WelfareScheme.findById(id);
+
+    if (!scheme) {
+      return notFoundResponse(res, 'Welfare scheme not found');
+    }
+
+    // Update allowed fields
+    const allowedFields = [
+      'name', 'description', 'category', 'status',
+      'totalBudget', 'allocatedBudget', 'maxBeneficiaries',
+      'startDate', 'endDate', 'enrollmentStartDate', 'enrollmentEndDate',
+      'requiredDocuments', 'ministry', 'department', 'implementingAgency',
+      'helplineNumber', 'email', 'website'
+    ];
+
+    allowedFields.forEach(field => {
+      if (updates[field] !== undefined) {
+        if (['startDate', 'endDate', 'enrollmentStartDate', 'enrollmentEndDate'].includes(field)) {
+          scheme[field] = updates[field] ? new Date(updates[field]) : null;
+        } else {
+          scheme[field] = updates[field];
+        }
+      }
+    });
+
+    // Update nested fields
+    if (updates.eligibilityCriteria) {
+      scheme.eligibilityCriteria = {
+        ...scheme.eligibilityCriteria?.toObject?.() || scheme.eligibilityCriteria,
+        ...updates.eligibilityCriteria
+      };
+    }
+
+    if (updates.benefits) {
+      scheme.benefits = {
+        ...scheme.benefits?.toObject?.() || scheme.benefits,
+        ...updates.benefits
+      };
+    }
+
+    scheme.lastModifiedBy = req.user._id;
+
+    await scheme.save();
+
+    // Log the action
+    await AuditLog.create({
+      userId: req.user._id,
+      action: 'welfare_scheme_updated',
+      category: 'scheme',
+      resourceType: 'welfare_scheme',
+      resourceId: scheme._id,
+      resourceName: scheme.name,
+      description: `Updated welfare scheme: ${scheme.name} (${scheme.code})`,
+      metadata: {
+        schemeCode: scheme.code,
+        updatedFields: Object.keys(updates)
+      },
+      success: true
+    });
+
+    logger.info(`Welfare scheme updated: ${scheme.code} by user ${req.user._id}`);
+
+    // Re-evaluate eligibility for all workers against all active schemes
+    let eligibilityResult = null;
+    try {
+      eligibilityResult = await evaluateEligibilityForAllSchemes();
+      logger.info(`Post-update eligibility evaluation: ${eligibilityResult.workersUpdated} workers updated`);
+    } catch (evalErr) {
+      logger.error('Non-fatal: eligibility evaluation failed after scheme update:', evalErr);
+    }
+
+    // Reload scheme to get updated beneficiary count
+    const updatedScheme = await WelfareScheme.findById(scheme._id);
+
+    return successResponse(res, {
+      ...updatedScheme.toJSON(),
+      eligibilityResult
+    }, 'Welfare scheme updated successfully');
+
+  } catch (error) {
+    logger.error('Update welfare scheme error:', error);
+    return errorResponse(res, error.message, 500);
+  }
+};
+
+/**
+ * Delete a welfare scheme
+ */
+export const deleteWelfareScheme = async (req, res) => {
+  try {
+    const { id } = req.params;
+    // Support hardDelete from body or query param
+    const hardDelete = req.body?.hardDelete === true || req.query?.hardDelete === 'true';
+
+    const scheme = await WelfareScheme.findById(id);
+
+    if (!scheme) {
+      return notFoundResponse(res, 'Welfare scheme not found');
+    }
+
+    if (hardDelete === true) {
+      await WelfareScheme.deleteOne({ _id: id });
+
+      await AuditLog.create({
+        userId: req.user._id,
+        action: 'welfare_scheme_deleted',
+        category: 'scheme',
+        resourceType: 'welfare_scheme',
+        resourceId: scheme._id,
+        resourceName: scheme.name,
+        description: `Permanently deleted welfare scheme: ${scheme.name} (${scheme.code})`,
+        metadata: { schemeCode: scheme.code },
+        success: true
+      });
+
+      logger.info(`Welfare scheme permanently deleted: ${scheme.code} by user ${req.user._id}`);
+
+      // Re-evaluate: remove scheme from workers' eligibleSchemes
+      try {
+        await evaluateEligibilityForAllSchemes();
+      } catch (evalErr) {
+        logger.error('Non-fatal: eligibility evaluation failed after scheme deletion:', evalErr);
+      }
+
+      return successResponse(res, null, 'Welfare scheme permanently deleted');
+    }
+
+    // Soft delete - set status to closed
+    scheme.status = 'closed';
+    scheme.lastModifiedBy = req.user._id;
+    await scheme.save();
+
+    await AuditLog.create({
+      userId: req.user._id,
+      action: 'welfare_scheme_closed',
+      category: 'scheme',
+      resourceType: 'welfare_scheme',
+      resourceId: scheme._id,
+      resourceName: scheme.name,
+      description: `Closed welfare scheme: ${scheme.name} (${scheme.code})`,
+      metadata: { schemeCode: scheme.code },
+      success: true
+    });
+
+    logger.info(`Welfare scheme closed: ${scheme.code} by user ${req.user._id}`);
+
+    // Re-evaluate: closed scheme should no longer qualify workers
+    try {
+      await evaluateEligibilityForAllSchemes();
+    } catch (evalErr) {
+      logger.error('Non-fatal: eligibility evaluation failed after scheme closure:', evalErr);
+    }
+
+    // Reload to get updated beneficiary count
+    const updatedScheme = await WelfareScheme.findById(scheme._id);
+
+    return successResponse(res, updatedScheme, 'Welfare scheme closed successfully');
+
+  } catch (error) {
+    logger.error('Delete welfare scheme error:', error);
     return errorResponse(res, error.message, 500);
   }
 };
@@ -1118,6 +1486,9 @@ export default {
   resolveAnomaly,
   getWelfareSchemes,
   checkSchemeEligibility,
+  createWelfareScheme,
+  updateWelfareScheme,
+  deleteWelfareScheme,
   generateReport,
   runAnomalyScan,
   // Classification Policy Management

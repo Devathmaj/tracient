@@ -129,48 +129,74 @@ router.get(
   govController.getWelfareSchemes
 );
 
-// TODO: Implement createWelfareScheme controller
-// router.post(
-//   '/welfare-schemes',
-//   authenticate,
-//   govOrAdmin,
-//   [
-//     body('name').notEmpty().trim().withMessage('Name is required'),
-//     body('description').notEmpty().trim().withMessage('Description is required'),
-//     body('eligibilityCriteria').isObject().withMessage('Eligibility criteria is required'),
-//     body('benefits').isArray().withMessage('Benefits must be an array'),
-//     body('budget').optional().isNumeric()
-//   ],
-//   validate,
-//   govController.createWelfareScheme
-// );
+/**
+ * @route POST /api/government/welfare-schemes
+ * @desc Create a new welfare scheme
+ * @access Private (Government, Admin)
+ */
+router.post(
+  '/welfare-schemes',
+  authenticate,
+  govOrAdmin,
+  [
+    body('name').notEmpty().trim().withMessage('Name is required'),
+    body('code').notEmpty().trim().withMessage('Code is required'),
+    body('description').notEmpty().trim().withMessage('Description is required'),
+    body('category').isIn(['food', 'housing', 'education', 'health', 'employment', 'pension', 'skill', 'other']).withMessage('Valid category is required'),
+    body('eligibilityCriteria').optional().isObject().withMessage('Eligibility criteria must be an object'),
+    body('eligibilityCriteria.incomeCategory').optional().isIn(['BPL', 'APL', 'both']).withMessage('Income category must be BPL, APL, or both'),
+    body('eligibilityCriteria.maxAnnualIncome').optional().isNumeric().withMessage('Max annual income must be a number'),
+    body('benefits').optional().isObject().withMessage('Benefits must be an object'),
+    body('benefits.type').optional().isIn(['cash', 'kind', 'service', 'subsidy', 'mixed']).withMessage('Invalid benefit type'),
+    body('benefits.amount').optional().isNumeric().withMessage('Benefit amount must be a number'),
+    body('totalBudget').optional().isNumeric().withMessage('Total budget must be a number'),
+    body('status').optional().isIn(['draft', 'active', 'suspended', 'closed']).withMessage('Invalid status')
+  ],
+  validate,
+  govController.createWelfareScheme
+);
 
-// TODO: Implement updateWelfareScheme controller
-// router.put(
-//   '/welfare-schemes/:id',
-//   authenticate,
-//   govOrAdmin,
-//   validateObjectId('id'),
-//   [
-//     body('name').optional().trim(),
-//     body('description').optional().trim(),
-//     body('eligibilityCriteria').optional().isObject(),
-//     body('benefits').optional().isArray(),
-//     body('budget').optional().isNumeric(),
-//     body('isActive').optional().isBoolean()
-//   ],
-//   validate,
-//   govController.updateWelfareScheme
-// );
+/**
+ * @route PUT /api/government/welfare-schemes/:id
+ * @desc Update a welfare scheme
+ * @access Private (Government, Admin)
+ */
+router.put(
+  '/welfare-schemes/:id',
+  authenticate,
+  govOrAdmin,
+  validateObjectId('id'),
+  [
+    body('name').optional().trim(),
+    body('description').optional().trim(),
+    body('category').optional().isIn(['food', 'housing', 'education', 'health', 'employment', 'pension', 'skill', 'other']),
+    body('eligibilityCriteria').optional().isObject(),
+    body('eligibilityCriteria.incomeCategory').optional().isIn(['BPL', 'APL', 'both']),
+    body('eligibilityCriteria.maxAnnualIncome').optional().isNumeric(),
+    body('benefits').optional().isObject(),
+    body('totalBudget').optional().isNumeric(),
+    body('status').optional().isIn(['draft', 'active', 'suspended', 'closed']),
+  ],
+  validate,
+  govController.updateWelfareScheme
+);
 
-// TODO: Implement checkEligibility controller
-// router.get(
-//   '/eligibility/:workerId',
-//   authenticate,
-//   govOrAdmin,
-//   validateObjectId('workerId'),
-//   govController.checkEligibility
-// );
+/**
+ * @route DELETE /api/government/welfare-schemes/:id
+ * @desc Delete (close) a welfare scheme
+ * @access Private (Government, Admin)
+ */
+router.delete(
+  '/welfare-schemes/:id',
+  authenticate,
+  govOrAdmin,
+  validateObjectId('id'),
+  [
+    body('hardDelete').optional().isBoolean()
+  ],
+  validate,
+  govController.deleteWelfareScheme
+);
 
 /**
  * @route POST /api/government/reports/generate

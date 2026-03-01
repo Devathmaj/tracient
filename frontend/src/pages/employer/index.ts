@@ -6,3 +6,4 @@ export { default as PaymentHistory } from './PaymentHistory';
 export { default as EmployerProfile } from './Profile';
 export { default as EmployerFamily } from './Family';
 export { default as EmployerFamilySurvey } from './FamilySurvey';
+export { default as EmployerWelfare } from './Welfare';

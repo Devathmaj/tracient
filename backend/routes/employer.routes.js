@@ -893,4 +893,27 @@ router.delete(
   })
 );
 
+/**
+ * @route GET /api/employers/welfare-schemes
+ * @desc Get active welfare schemes visible to employers
+ * @access Private (Employer)
+ */
+router.get(
+  '/welfare-schemes',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const { WelfareScheme } = await import('../models/index.js');
+    
+    const { category } = req.query;
+    const query = { status: 'active' };
+    if (category) query.category = category;
+    
+    const schemes = await WelfareScheme.find(query)
+      .select('name code description category eligibilityCriteria benefits startDate endDate status currentBeneficiaries maxBeneficiaries ministry department')
+      .sort({ name: 1 });
+    
+    return successResponse(res, schemes);
+  })
+);
+
 export default router;

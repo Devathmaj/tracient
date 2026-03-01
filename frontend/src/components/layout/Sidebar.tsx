@@ -59,6 +59,7 @@ const getNavItems = (role: UserRole): NavItem[] => {
         { label: 'Workers', icon: Users, path: '/employer/workers' },
         { label: 'Family', icon: UsersRound, path: '/employer/family' },
         { label: 'Payment History', icon: History, path: '/employer/payments' },
+        { label: 'Welfare Schemes', icon: Heart, path: '/employer/welfare' },
         { label: 'Send Payment', icon: QrCode, path: '/scan-qr' },
         { label: 'Reports', icon: FileText, path: '/employer/reports' },
       ];

@@ -99,9 +99,61 @@ const FamilySurvey: React.FC = () => {
     
     setFormData(prev => ({
       ...prev,
-      [name]: type === 'checkbox' ? checked : type === 'number' ? Number(value) : value
+      [name]: type === 'checkbox' ? checked : value
     }));
     
+    // Clear error for this field
+    if (errors[name]) {
+      setErrors(prev => {
+        const newErrors = { ...prev };
+        delete newErrors[name];
+        return newErrors;
+      });
+    }
+  };
+
+  // Configuration for each numeric field: min, max, allowDecimal
+  const numericFieldConfig: Record<string, { min: number; max: number; allowDecimal?: boolean }> = {
+    family_size:             { min: 1,  max: 20 },
+    head_age:                { min: 18, max: 120 },
+    highest_earner_monthly:  { min: 0,  max: 9999999 },
+    children_0_6:            { min: 0,  max: 15 },
+    children_6_14:           { min: 0,  max: 15 },
+    children_in_school:      { min: 0,  max: 15 },
+    adults_16_59:            { min: 0,  max: 20 },
+    adult_males_16_59:       { min: 0,  max: 15 },
+    adult_females_16_59:     { min: 0,  max: 15 },
+    elderly_60_plus:         { min: 0,  max: 15 },
+    able_bodied_adults:      { min: 0,  max: 20 },
+    working_members:         { min: 0,  max: 15 },
+    literate_adults_above_25:{ min: 0,  max: 15 },
+    total_land_acres:        { min: 0,  max: 999, allowDecimal: true },
+    irrigated_land_acres:    { min: 0,  max: 999, allowDecimal: true },
+    crop_seasons:            { min: 0,  max: 4 },
+    num_rooms:               { min: 0,  max: 20 },
+  };
+
+  const handleNumericInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    const config = numericFieldConfig[name];
+    if (!config) return;
+
+    // Allow empty string so user can clear field
+    if (value === '') {
+      setFormData(prev => ({ ...prev, [name]: 0 }));
+      return;
+    }
+
+    // Filter: allow only digits and optionally one decimal point
+    const pattern = config.allowDecimal ? /^[0-9]*\.?[0-9]*$/ : /^[0-9]*$/;
+    if (!pattern.test(value)) return; // reject non-numeric characters
+
+    const num = config.allowDecimal ? parseFloat(value) : parseInt(value, 10);
+    if (isNaN(num)) return;
+    if (num > config.max) return; // silently reject values above max
+
+    setFormData(prev => ({ ...prev, [name]: num }));
+
     // Clear error for this field
     if (errors[name]) {
       setErrors(prev => {
@@ -255,13 +307,13 @@ const FamilySurvey: React.FC = () => {
             Total Family Members <span className="text-red-500">*</span>
           </label>
           <input
-            type="number"
+            type="text"
+            inputMode="numeric"
             name="family_size"
             value={formData.family_size}
-            onChange={handleChange}
-            min="1"
-            max="20"
+            onChange={handleNumericInput}
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+            placeholder="1–20"
           />
           {errors.family_size && <p className="text-red-500 text-sm mt-1">{errors.family_size}</p>}
         </div>
@@ -271,13 +323,13 @@ const FamilySurvey: React.FC = () => {
             Age of Household Head <span className="text-red-500">*</span>
           </label>
           <input
-            type="number"
+            type="text"
+            inputMode="numeric"
             name="head_age"
             value={formData.head_age}
-            onChange={handleChange}
-            min="18"
-            max="100"
+            onChange={handleNumericInput}
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+            placeholder="18–120"
           />
           {errors.head_age && <p className="text-red-500 text-sm mt-1">{errors.head_age}</p>}
         </div>
@@ -287,13 +339,13 @@ const FamilySurvey: React.FC = () => {
             Highest Monthly Income (₹)
           </label>
           <input
-            type="number"
+            type="text"
+            inputMode="numeric"
             name="highest_earner_monthly"
             value={formData.highest_earner_monthly}
-            onChange={handleChange}
-            min="0"
-            max="500000"
+            onChange={handleNumericInput}
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+            placeholder="Monthly income in ₹"
           />
         </div>
 
@@ -375,13 +427,13 @@ const FamilySurvey: React.FC = () => {
             Children (0-6 years)
           </label>
           <input
-            type="number"
+            type="text"
+            inputMode="numeric"
             name="children_0_6"
             value={formData.children_0_6}
-            onChange={handleChange}
-            min="0"
-            max="10"
+            onChange={handleNumericInput}
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+            placeholder="0–15"
           />
         </div>
 
@@ -390,13 +442,13 @@ const FamilySurvey: React.FC = () => {
             Children (6-14 years)
           </label>
           <input
-            type="number"
+            type="text"
+            inputMode="numeric"
             name="children_6_14"
             value={formData.children_6_14}
-            onChange={handleChange}
-            min="0"
-            max="10"
+            onChange={handleNumericInput}
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+            placeholder="0–15"
           />
         </div>
 
@@ -405,13 +457,13 @@ const FamilySurvey: React.FC = () => {
             Children in School
           </label>
           <input
-            type="number"
+            type="text"
+            inputMode="numeric"
             name="children_in_school"
             value={formData.children_in_school}
-            onChange={handleChange}
-            min="0"
-            max="10"
+            onChange={handleNumericInput}
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+            placeholder="0–15"
           />
         </div>
 
@@ -420,13 +472,13 @@ const FamilySurvey: React.FC = () => {
             Adults (16-59 years)
           </label>
           <input
-            type="number"
+            type="text"
+            inputMode="numeric"
             name="adults_16_59"
             value={formData.adults_16_59}
-            onChange={handleChange}
-            min="0"
-            max="15"
+            onChange={handleNumericInput}
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+            placeholder="0–20"
           />
         </div>
 
@@ -435,13 +487,13 @@ const FamilySurvey: React.FC = () => {
             Adult Males (16-59)
           </label>
           <input
-            type="number"
+            type="text"
+            inputMode="numeric"
             name="adult_males_16_59"
             value={formData.adult_males_16_59}
-            onChange={handleChange}
-            min="0"
-            max="10"
+            onChange={handleNumericInput}
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+            placeholder="0–15"
           />
         </div>
 
@@ -450,13 +502,13 @@ const FamilySurvey: React.FC = () => {
             Adult Females (16-59)
           </label>
           <input
-            type="number"
+            type="text"
+            inputMode="numeric"
             name="adult_females_16_59"
             value={formData.adult_females_16_59}
-            onChange={handleChange}
-            min="0"
-            max="10"
+            onChange={handleNumericInput}
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+            placeholder="0–15"
           />
         </div>
 
@@ -465,13 +517,13 @@ const FamilySurvey: React.FC = () => {
             Elderly (60+ years)
           </label>
           <input
-            type="number"
+            type="text"
+            inputMode="numeric"
             name="elderly_60_plus"
             value={formData.elderly_60_plus}
-            onChange={handleChange}
-            min="0"
-            max="10"
+            onChange={handleNumericInput}
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+            placeholder="0–15"
           />
         </div>
 
@@ -480,13 +532,13 @@ const FamilySurvey: React.FC = () => {
             Able-bodied Adults
           </label>
           <input
-            type="number"
+            type="text"
+            inputMode="numeric"
             name="able_bodied_adults"
             value={formData.able_bodied_adults}
-            onChange={handleChange}
-            min="0"
-            max="15"
+            onChange={handleNumericInput}
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+            placeholder="0–20"
           />
         </div>
 
@@ -495,13 +547,13 @@ const FamilySurvey: React.FC = () => {
             Working Members
           </label>
           <input
-            type="number"
+            type="text"
+            inputMode="numeric"
             name="working_members"
             value={formData.working_members}
-            onChange={handleChange}
-            min="0"
-            max="10"
+            onChange={handleNumericInput}
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+            placeholder="0–15"
           />
         </div>
 
@@ -510,13 +562,13 @@ const FamilySurvey: React.FC = () => {
             Literate Adults (25+)
           </label>
           <input
-            type="number"
+            type="text"
+            inputMode="numeric"
             name="literate_adults_above_25"
             value={formData.literate_adults_above_25}
-            onChange={handleChange}
-            min="0"
-            max="10"
+            onChange={handleNumericInput}
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+            placeholder="0–15"
           />
         </div>
       </div>
@@ -536,14 +588,13 @@ const FamilySurvey: React.FC = () => {
               Total Land (acres)
             </label>
             <input
-              type="number"
+              type="text"
+              inputMode="decimal"
               name="total_land_acres"
               value={formData.total_land_acres}
-              onChange={handleChange}
-              min="0"
-              max="100"
-              step="0.01"
+              onChange={handleNumericInput}
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+              placeholder="e.g. 2.5 (max 999)"
             />
           </div>
 
@@ -552,14 +603,13 @@ const FamilySurvey: React.FC = () => {
               Irrigated Land (acres)
             </label>
             <input
-              type="number"
+              type="text"
+              inputMode="decimal"
               name="irrigated_land_acres"
               value={formData.irrigated_land_acres}
-              onChange={handleChange}
-              min="0"
-              max="100"
-              step="0.01"
+              onChange={handleNumericInput}
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+              placeholder="e.g. 1.25 (max 999)"
             />
           </div>
 
@@ -568,13 +618,13 @@ const FamilySurvey: React.FC = () => {
               Crop Seasons per Year
             </label>
             <input
-              type="number"
+              type="text"
+              inputMode="numeric"
               name="crop_seasons"
               value={formData.crop_seasons}
-              onChange={handleChange}
-              min="0"
-              max="3"
+              onChange={handleNumericInput}
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+              placeholder="0–4"
             />
           </div>
         </div>
@@ -701,13 +751,13 @@ const FamilySurvey: React.FC = () => {
             Number of Rooms
           </label>
           <input
-            type="number"
+            type="text"
+            inputMode="numeric"
             name="num_rooms"
             value={formData.num_rooms}
-            onChange={handleChange}
-            min="0"
-            max="10"
+            onChange={handleNumericInput}
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+            placeholder="0–20"
           />
         </div>
 

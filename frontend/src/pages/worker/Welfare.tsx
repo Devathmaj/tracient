@@ -25,6 +25,36 @@ import { formatCurrency, formatDate } from '@/utils/formatters';
 import { CHART_COLORS, WELFARE_SCHEMES, BPL_THRESHOLD } from '@/utils/constants';
 import { familyService } from '@/services';
 import { Family } from '@/types/family';
+import api from '@/services/api';
+
+interface WelfareSchemeFromAPI {
+  _id: string;
+  name: string;
+  code: string;
+  description: string;
+  category: string;
+  eligibilityCriteria: {
+    incomeCategory: string;
+    maxAnnualIncome?: number;
+    minAge?: number;
+    maxAge?: number;
+    gender: string;
+  };
+  benefits: {
+    type: string;
+    amount: number;
+    frequency: string;
+    description: string;
+  };
+  status: string;
+  startDate?: string;
+  endDate?: string;
+  currentBeneficiaries: number;
+  maxBeneficiaries?: number;
+  ministry?: string;
+  department?: string;
+  isEligible?: boolean;
+}
 
 interface BPLStatusData {
   status: 'eligible' | 'not_eligible' | 'pending';
@@ -81,10 +111,23 @@ const BPLStatus: React.FC = () => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [classificationMessage, setClassificationMessage] = useState<string | null>(null);
   const [classificationError, setClassificationError] = useState<string | null>(null);
+  const [liveSchemes, setLiveSchemes] = useState<WelfareSchemeFromAPI[]>([]);
 
   useEffect(() => {
     fetchData();
+    fetchLiveSchemes();
   }, []);
+
+  const fetchLiveSchemes = async () => {
+    try {
+      const response: any = await api.get('/workers/welfare-schemes');
+      if (response.success && response.data) {
+        setLiveSchemes(response.data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch welfare schemes:', err);
+    }
+  };
 
   const fetchData = async () => {
     setIsLoading(true);
@@ -346,20 +389,99 @@ const BPLStatus: React.FC = () => {
         </Card>
       </div>
 
-      {/* Eligible Welfare Schemes */}
-      {((family && family.eligible_schemes && family.eligible_schemes.length > 0) || data.status === 'eligible') && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Heart className="h-5 w-5 text-red-500" />
-              Eligible Welfare Schemes
-            </CardTitle>
-            <CardDescription>
-              Based on your BPL status, you are eligible for the following government schemes
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {family && family.eligible_schemes && family.eligible_schemes.length > 0 ? (
+      {/* Active Welfare Schemes from Government */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Heart className="h-5 w-5 text-red-500" />
+            Government Welfare Schemes
+          </CardTitle>
+          <CardDescription>
+            Active welfare programs — schemes you qualify for are highlighted
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {liveSchemes.length > 0 ? (
+            <>
+              {/* Eligibility summary */}
+              <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center gap-3">
+                <CheckCircle className="h-5 w-5 text-blue-600 flex-shrink-0" />
+                <p className="text-sm text-blue-800">
+                  You are eligible for <strong>{liveSchemes.filter(s => s.isEligible).length}</strong> out of{' '}
+                  <strong>{liveSchemes.length}</strong> active welfare schemes.
+                </p>
+              </div>
+
+              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {/* Sort eligible schemes first */}
+                {[...liveSchemes]
+                  .sort((a, b) => (b.isEligible ? 1 : 0) - (a.isEligible ? 1 : 0))
+                  .map((scheme) => (
+                  <div 
+                    key={scheme._id}
+                    className={`p-4 border rounded-lg transition-colors ${
+                      scheme.isEligible
+                        ? 'border-green-300 bg-green-50 hover:border-green-400 ring-1 ring-green-200' 
+                        : 'border-gray-200 bg-gray-50 opacity-60'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 mb-2">
+                      <Badge variant="primary" className="text-xs">{scheme.category}</Badge>
+                      <Badge 
+                        variant={scheme.eligibilityCriteria?.incomeCategory === 'BPL' ? 'warning' : 
+                                scheme.eligibilityCriteria?.incomeCategory === 'APL' ? 'success' : 'primary'}
+                        className="text-xs"
+                      >
+                        {scheme.eligibilityCriteria?.incomeCategory === 'both' ? 'All' : scheme.eligibilityCriteria?.incomeCategory}
+                      </Badge>
+                      {scheme.isEligible && (
+                        <Badge variant="success" className="text-xs ml-auto">
+                          <CheckCircle className="h-3 w-3 mr-1 inline" />
+                          Eligible
+                        </Badge>
+                      )}
+                    </div>
+                    <h4 className="font-medium text-gray-900">{scheme.name}</h4>
+                    <p className="text-xs text-gray-400">{scheme.code}</p>
+                    <p className="text-sm text-gray-500 mt-1 line-clamp-2">{scheme.description}</p>
+                    {scheme.benefits?.amount > 0 && (
+                      <p className="text-sm font-medium text-green-600 mt-2">
+                        {formatCurrency(scheme.benefits.amount)}
+                        <span className="text-xs text-gray-400 ml-1">/{scheme.benefits.frequency}</span>
+                      </p>
+                    )}
+                    {scheme.eligibilityCriteria?.maxAnnualIncome && (
+                      <p className="text-xs text-gray-500 mt-1">
+                        Max income: {formatCurrency(scheme.eligibilityCriteria.maxAnnualIncome)}/yr
+                      </p>
+                    )}
+                    <div className="flex items-center justify-between mt-3">
+                      {!scheme.isEligible && (
+                        <Badge variant="default" className="text-xs">
+                          <XCircle className="h-3 w-3 mr-1 inline" />
+                          Not Eligible
+                        </Badge>
+                      )}
+                      {scheme.ministry && (
+                        <span className="text-xs text-gray-400 ml-auto">{scheme.ministry}</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : (
+            <div className="text-center py-8">
+              <Heart className="h-10 w-10 text-gray-300 mx-auto mb-3" />
+              <p className="text-gray-500">No active welfare schemes available at the moment.</p>
+              <p className="text-sm text-gray-400 mt-1">Check back later for new government programs.</p>
+            </div>
+          )}
+          
+          {/* Also show family-specific eligible schemes if available */}
+          {family && family.eligible_schemes && family.eligible_schemes.length > 0 && (
+            <div className="mt-6 pt-4 border-t">
+              <h4 className="text-sm font-medium text-gray-700 mb-2">Your Personally Eligible Schemes</h4>
               <div className="flex flex-wrap gap-2">
                 {family.eligible_schemes.map((scheme, idx) => (
                   <Badge key={idx} variant="primary" className="text-sm px-3 py-1">
@@ -367,28 +489,10 @@ const BPLStatus: React.FC = () => {
                   </Badge>
                 ))}
               </div>
-            ) : (
-              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {data.eligibleSchemes.map((scheme) => (
-                  <div 
-                    key={scheme.id}
-                    className="p-4 border border-gray-200 rounded-lg hover:border-primary-300 hover:bg-primary-50 transition-colors"
-                  >
-                    <h4 className="font-medium text-gray-900">{scheme.name}</h4>
-                    <p className="text-sm text-gray-500 mt-1">{scheme.description}</p>
-                    <div className="flex items-center justify-between mt-3">
-                      <Badge variant="success" className="text-xs">Eligible</Badge>
-                      <Button variant="ghost" size="sm" className="text-primary-600">
-                        Apply →
-                      </Button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Verification History */}
       <Card>
