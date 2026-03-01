@@ -297,6 +297,51 @@ router.post(
 );
 
 // ============================================================================
+// WELFARE SCHEMES ROUTE - MUST BE BEFORE /:id ROUTES
+// ============================================================================
+
+/**
+ * @route GET /api/workers/welfare-schemes
+ * @desc Get active welfare schemes with personalized eligibility for logged-in worker
+ * @access Private (Worker)
+ */
+router.get(
+  '/welfare-schemes',
+  authenticate,
+  async (req, res) => {
+    try {
+      const { WelfareScheme } = await import('../models/index.js');
+      const { Worker: WorkerModel } = await import('../models/index.js');
+      const { successResponse } = await import('../utils/response.util.js');
+      
+      const { category } = req.query;
+      const query = { status: 'active' };
+      if (category) query.category = category;
+      
+      const schemes = await WelfareScheme.find(query)
+        .select('name code description category eligibilityCriteria benefits startDate endDate status currentBeneficiaries maxBeneficiaries ministry department')
+        .sort({ name: 1 });
+
+      // Get the current worker's eligibleSchemes list
+      const worker = await WorkerModel.findOne({ userId: req.user.id }).select('eligibleSchemes');
+      const workerEligibleCodes = worker?.eligibleSchemes || [];
+
+      // Annotate each scheme with whether this worker is eligible
+      const annotatedSchemes = schemes.map(s => {
+        const obj = s.toJSON();
+        obj.isEligible = workerEligibleCodes.includes(s.code);
+        return obj;
+      });
+      
+      return successResponse(res, annotatedSchemes);
+    } catch (error) {
+      const { errorResponse } = await import('../utils/response.util.js');
+      return errorResponse(res, error.message, 500);
+    }
+  }
+);
+
+// ============================================================================
 // WORKER ID ROUTES - These use /:id parameter, must come AFTER specific routes
 // ============================================================================
 

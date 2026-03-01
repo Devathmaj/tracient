@@ -39,6 +39,7 @@ const PaymentHistory = React.lazy(() => import('./pages/employer/PaymentHistory'
 const EmployerFamily = React.lazy(() => import('./pages/employer/Family'));
 const EmployerFamilySurvey = React.lazy(() => import('./pages/employer/FamilySurvey'));
 const EmployerUpdateFamily = React.lazy(() => import('./pages/worker/UpdateFamily')); // Reuse worker component
+const EmployerWelfare = React.lazy(() => import('./pages/employer/Welfare'));
 
 // Government Pages
 const GovDashboard = React.lazy(() => import('./pages/government/Dashboard'));
@@ -130,6 +131,7 @@ const App: React.FC = () => {
           <Route path="family/survey" element={<EmployerFamilySurvey />} />
           <Route path="family/update" element={<EmployerUpdateFamily />} />
           <Route path="payments" element={<PaymentHistory />} />
+          <Route path="welfare" element={<EmployerWelfare />} />
           <Route path="profile" element={<EmployerProfile />} />
         </Route>
 
