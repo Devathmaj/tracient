@@ -112,11 +112,11 @@ const WorkerRegistrationForm: React.FC<{
         />
 
         <Input
-          label="Ration Card Number (Optional)"
-          placeholder="Enter ration card number (e.g., AP1234567890)"
+          label="Ration Card Number"
+          placeholder="Enter 12-digit ration card number (e.g., 123456789012)"
           leftIcon={<CreditCard className="h-5 w-5" />}
           error={errors.ration_no?.message}
-          maxLength={15}
+          maxLength={12}
           {...register('ration_no')}
         />
 
@@ -384,11 +384,11 @@ const EmployerRegistrationForm: React.FC<{
         />
 
         <Input
-          label="Ration Card Number (Optional)"
-          placeholder="Enter ration card number (e.g., AP1234567890)"
+          label="Ration Card Number"
+          placeholder="Enter 12-digit ration card number (e.g., 123456789012)"
           leftIcon={<CreditCard className="h-5 w-5" />}
           error={errors.ration_no?.message}
-          maxLength={15}
+          maxLength={12}
           {...register('ration_no')}
         />
 
