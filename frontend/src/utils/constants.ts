@@ -45,7 +45,6 @@ export const ROUTES = {
   EMPLOYER_BULK_UPLOAD: '/employer/bulk-upload',
   EMPLOYER_WORKERS: '/employer/workers',
   EMPLOYER_PAYMENTS: '/employer/payments',
-  EMPLOYER_REPORTS: '/employer/reports',
   
   // Government routes
   GOV_DASHBOARD: '/government/dashboard',
@@ -68,7 +67,7 @@ export const ROUTES = {
 
 // Role labels
 export const ROLE_LABELS: Record<string, string> = {
-  worker: 'Worker',
+  worker: 'User',
   employer: 'Employer',
   government: 'Government Official',
   admin: 'System Administrator',

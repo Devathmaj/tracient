@@ -28,6 +28,7 @@ const WorkerFamilySurvey = React.lazy(() => import('./pages/worker/FamilySurvey'
 const WorkerUpdateFamily = React.lazy(() => import('./pages/worker/UpdateFamily'));
 const BankAccounts = React.lazy(() => import('./pages/worker/BankAccounts'));
 const GenerateQR = React.lazy(() => import('./pages/worker/GenerateQR'));
+const ApplyEmployer = React.lazy(() => import('./pages/worker/ApplyEmployer'));
 const ScanQR = React.lazy(() => import('./pages/worker/ScanQR'));
 
 // Employer Pages
@@ -108,10 +109,20 @@ const App: React.FC = () => {
           <Route path="bank-accounts" element={<BankAccounts />} />
           <Route path="generate-qr" element={<GenerateQR />} />
           <Route path="profile" element={<WorkerProfile />} />
+          <Route path="apply-employer" element={<ApplyEmployer />} />
         </Route>
 
-        {/* Public QR Payment Route (no auth needed) */}
-        <Route path="/scan-qr" element={<ScanQR />} />
+        {/* QR Payment Route (authenticated, with dashboard layout) */}
+        <Route
+          path="/scan-qr"
+          element={
+            <ProtectedRoute allowedRoles={['worker', 'employer', 'admin']}>
+              <DashboardLayout />
+            </ProtectedRoute>
+          }
+        >
+          <Route index element={<ScanQR />} />
+        </Route>
 
         {/* Employer Routes */}
         <Route

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import WorkerRequestsPanel from '@/components/worker/WorkerRequestsPanel';
 import { Link } from 'react-router-dom';
 import { 
   Wallet, 
@@ -222,6 +223,9 @@ const WorkerDashboard: React.FC = () => {
           <BPLBadge status={bplStatus} showLabel />
         </div>
       </div>
+
+      {/* Worker Requests from Employers */}
+      <WorkerRequestsPanel />
 
       {/* Error Alert */}
       {error && (

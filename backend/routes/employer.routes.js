@@ -15,6 +15,50 @@ import { auditLog, logger } from '../utils/logger.util.js';
 
 const router = Router();
 
+const findEmployerByUserId = async (userId) => {
+  let employer = await Employer.findOne({ userId });
+  if (!employer) {
+    employer = await Employer.findOne({ user: userId });
+    if (employer && !employer.userId) {
+      employer.userId = userId;
+      await employer.save();
+    }
+  }
+  return employer;
+};
+
+// Middleware to ensure employer profile exists for dual-role users
+const ensureEmployerProfile = asyncHandler(async (req, res, next) => {
+  // Skip for the apply route itself to avoid loops
+  if (req.path === '/profile/apply') return next();
+  
+  if (req.user) {
+    let employer = await findEmployerByUserId(req.user.id);
+    if (!employer) {
+      const user = await User.findById(req.user.id);
+      if (user) {
+        employer = await Employer.create({
+          userId: user._id,
+          companyName: user.name || 'My Business',
+          contactPerson: user.name,
+          email: user.email,
+          phone: user.phone || 'UNKNOWN'
+        });
+        
+        if (user.role !== ROLES.EMPLOYER) {
+          user.role = ROLES.EMPLOYER;
+          await user.save();
+        }
+        logger.info('Auto-created employer profile for user', { userId: user._id });
+      }
+    }
+  }
+  next();
+});
+
+// Apply authentication and employer profile check to all employer routes
+router.use(authenticate, ensureEmployerProfile);
+
 /**
  * @route GET /api/employers/profile
  * @desc Get current employer's profile
@@ -24,7 +68,7 @@ router.get(
   '/profile',
   authenticate,
   asyncHandler(async (req, res) => {
-    const employer = await Employer.findOne({ userId: req.user.id })
+    const employer = await findEmployerByUserId(req.user.id)
       .populate('userId', 'email role isActive lastLogin');
     
     if (!employer) {
@@ -32,6 +76,57 @@ router.get(
     }
     
     return successResponse(res, { employer });
+  })
+);
+
+/**
+ * @route POST /api/employers/profile/apply
+ * @desc Create employer profile for an existing user (Apply to be Employer)
+ * @access Private (Any authenticated user)
+ */
+router.post(
+  '/profile/apply',
+  authenticate,
+  [
+    body('businessName').trim().notEmpty().withMessage('Business name is required'),
+    body('pan').optional().trim(),
+    body('gstin').optional().trim()
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    // Check if employer profile already exists
+    const existing = await findEmployerByUserId(req.user.id);
+    if (existing) {
+      return successResponse(res, { employer: existing }, 'Employer profile already exists');
+    }
+
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return notFoundResponse(res, 'User not found');
+    }
+
+    const { businessName, pan, gstin } = req.body;
+
+    // Create employer profile
+    const employer = await Employer.create({
+      userId: user._id,
+      companyName: businessName,
+      contactPerson: user.name,
+      email: user.email,
+      phone: user.phone || '',
+      panNumber: pan || undefined,
+      gstin: gstin || undefined
+    });
+
+    // Update user role to employer if not already
+    if (user.role !== ROLES.EMPLOYER) {
+      user.role = ROLES.EMPLOYER;
+      await user.save();
+    }
+
+    logger.info('Employer profile created via apply', { userId: user._id, employerId: employer._id });
+
+    return successResponse(res, { employer }, 'Employer profile created successfully', 201);
   })
 );
 
@@ -52,7 +147,7 @@ router.put(
   ],
   validate,
   asyncHandler(async (req, res) => {
-    const employer = await Employer.findOne({ userId: req.user.id });
+    const employer = await findEmployerByUserId(req.user.id);
     
     if (!employer) {
       return notFoundResponse(res, 'Employer profile not found');
@@ -85,7 +180,7 @@ router.get(
   '/profile/payments',
   authenticate,
   asyncHandler(async (req, res) => {
-    const employer = await Employer.findOne({ userId: req.user.id });
+    const employer = await findEmployerByUserId(req.user.id);
     
     if (!employer) {
       return notFoundResponse(res, 'Employer profile not found');
@@ -133,7 +228,7 @@ router.get(
   authenticate,
   validatePagination,
   asyncHandler(async (req, res) => {
-    const employer = await Employer.findOne({ userId: req.user.id });
+    const employer = await findEmployerByUserId(req.user.id);
     
     if (!employer) {
       return notFoundResponse(res, 'Employer profile not found');
@@ -178,7 +273,7 @@ router.get(
   '/profile/dashboard',
   authenticate,
   asyncHandler(async (req, res) => {
-    const employer = await Employer.findOne({ userId: req.user.id });
+    const employer = await findEmployerByUserId(req.user.id);
     
     if (!employer) {
       return notFoundResponse(res, 'Employer profile not found');
@@ -216,7 +311,7 @@ router.get(
       ? Math.round(((currentMonthPayroll - prevMonthPayroll) / prevMonthPayroll) * 100 * 10) / 10
       : 0;
 
-    // Unique workers
+    // Unique workers (paid + linked)
     const workerMap = new Map();
     allWageRecords.forEach(record => {
       if (record.workerId) {
@@ -241,13 +336,58 @@ router.get(
         }
       }
     });
+
+    const linkedWorkers = await Worker.find({ currentEmployerId: employer._id })
+      .select('name phone idHash')
+      .lean();
+    linkedWorkers.forEach(worker => {
+      const workerId = worker._id.toString();
+      if (!workerMap.has(workerId)) {
+        workerMap.set(workerId, {
+          id: worker._id,
+          name: worker.name,
+          phone: worker.phone,
+          idHash: worker.idHash,
+          totalPaid: 0,
+          paymentCount: 0,
+          lastPayment: null,
+          firstPayment: null
+        });
+      }
+    });
+
+    const { WorkerRequest } = await import('../models/index.js');
+    const acceptedRequests = await WorkerRequest.find({
+      employerId: employer._id,
+      status: 'accepted'
+    })
+      .populate('workerId', 'name phone idHash')
+      .lean();
+
+    acceptedRequests.forEach(request => {
+      if (!request.workerId) return;
+      const workerId = request.workerId._id.toString();
+      if (!workerMap.has(workerId)) {
+        workerMap.set(workerId, {
+          id: request.workerId._id,
+          name: request.workerId.name,
+          phone: request.workerId.phone,
+          idHash: request.workerId.idHash,
+          totalPaid: 0,
+          paymentCount: 0,
+          lastPayment: null,
+          firstPayment: null
+        });
+      }
+    });
     
     const totalWorkers = workerMap.size;
-    // Active workers = paid in last 3 months
+    // Active workers = linked or paid in last 3 months
     const threeMonthsAgo = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
-    const activeWorkers = Array.from(workerMap.values()).filter(
-      w => new Date(w.lastPayment) >= threeMonthsAgo
-    ).length;
+    const activeWorkers = Array.from(workerMap.values()).filter(w => {
+      if (!w.lastPayment) return true;
+      return new Date(w.lastPayment) >= threeMonthsAgo;
+    }).length;
 
     // Monthly payroll trend (last 12 months)
     const monthlyPayrollTrend = [];
@@ -324,7 +464,7 @@ router.get(
   '/profile/workers/detailed',
   authenticate,
   asyncHandler(async (req, res) => {
-    const employer = await Employer.findOne({ userId: req.user.id });
+    const employer = await findEmployerByUserId(req.user.id);
     
     if (!employer) {
       return notFoundResponse(res, 'Employer profile not found');
@@ -416,9 +556,71 @@ router.get(
       }
     });
 
+    const linkedWorkers = await Worker.find({ currentEmployerId: employer._id })
+      .select('name phone email idHash maskedAadhaar')
+      .lean();
+    linkedWorkers.forEach(worker => {
+      const workerId = worker._id.toString();
+      if (!workerMap.has(workerId)) {
+        workerMap.set(workerId, {
+          id: worker._id,
+          name: worker.name || 'Unknown',
+          phone: worker.phone,
+          email: worker.email,
+          idHash: worker.idHash,
+          maskedAadhaar: worker.maskedAadhaar,
+          totalPaid: 0,
+          paymentCount: 0,
+          currentMonthPaid: 0,
+          currentYearPaid: 0,
+          lastPaymentDate: null,
+          firstPaymentDate: null,
+          monthlyBreakdown: {},
+          recentPayments: [],
+          status: 'active'
+        });
+      }
+    });
+
+    const { WorkerRequest } = await import('../models/index.js');
+    const acceptedRequests = await WorkerRequest.find({
+      employerId: employer._id,
+      status: 'accepted'
+    })
+      .populate('workerId', 'name phone email idHash maskedAadhaar')
+      .lean();
+
+    acceptedRequests.forEach(request => {
+      if (!request.workerId) return;
+      const workerId = request.workerId._id.toString();
+      if (!workerMap.has(workerId)) {
+        workerMap.set(workerId, {
+          id: request.workerId._id,
+          name: request.workerId.name || 'Unknown',
+          phone: request.workerId.phone,
+          email: request.workerId.email,
+          idHash: request.workerId.idHash,
+          maskedAadhaar: request.workerId.maskedAadhaar,
+          totalPaid: 0,
+          paymentCount: 0,
+          currentMonthPaid: 0,
+          currentYearPaid: 0,
+          lastPaymentDate: null,
+          firstPaymentDate: null,
+          monthlyBreakdown: {},
+          recentPayments: [],
+          status: 'active'
+        });
+      }
+    });
+
     // Determine active/inactive status (inactive if no payment in last 3 months)
     const threeMonthsAgo = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
     workerMap.forEach(worker => {
+      if (!worker.lastPaymentDate) {
+        worker.status = 'active';
+        return;
+      }
       worker.status = new Date(worker.lastPaymentDate) >= threeMonthsAgo ? 'active' : 'inactive';
     });
 
@@ -456,14 +658,16 @@ router.get(
       return order === 'desc' ? -comparison : comparison;
     });
 
+    const allWorkers = Array.from(workerMap.values());
+
     return successResponse(res, {
       workers,
       count: workers.length,
       summary: {
         totalWorkers: workerMap.size,
-        activeWorkers: workers.filter(w => w.status === 'active').length,
-        inactiveWorkers: workers.filter(w => w.status === 'inactive').length,
-        totalPaidAllWorkers: workers.reduce((sum, w) => sum + w.totalPaid, 0)
+        activeWorkers: allWorkers.filter(w => w.status === 'active').length,
+        inactiveWorkers: allWorkers.filter(w => w.status === 'inactive').length,
+        totalPaidAllWorkers: allWorkers.reduce((sum, w) => sum + w.totalPaid, 0)
       }
     });
   })
@@ -479,7 +683,7 @@ router.get(
   authenticate,
   validateObjectId('workerId'),
   asyncHandler(async (req, res) => {
-    const employer = await Employer.findOne({ userId: req.user.id });
+    const employer = await findEmployerByUserId(req.user.id);
     
     if (!employer) {
       return notFoundResponse(res, 'Employer profile not found');
@@ -916,4 +1120,279 @@ router.get(
   })
 );
 
+// ============================================================================
+// WORKER REQUEST ROUTES - Employer sends request, worker accepts/rejects
+// ============================================================================
+
+/**
+ * @route POST /api/employers/profile/workers/request
+ * @desc Send a worker add request by mobile number
+ * @access Private (Employer)
+ */
+router.post(
+  '/profile/workers/request',
+  authenticate,
+  [
+    body('phone').notEmpty().withMessage('Mobile number is required')
+      .matches(/^[+]?[\d\s-]{10,15}$/).withMessage('Invalid mobile number format'),
+    body('message').optional().isString().isLength({ max: 500 })
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { WorkerRequest } = await import('../models/index.js');
+    
+    const employer = await findEmployerByUserId(req.user.id);
+    if (!employer) {
+      return notFoundResponse(res, 'Employer profile not found');
+    }
+
+    const { phone, message } = req.body;
+
+    // Normalize phone number (strip spaces, dashes)
+    const normalizedPhone = phone.replace(/[\s-]/g, '');
+    const corePhone = normalizedPhone.replace(/^\+91/, '').replace(/^0/, '');
+    
+    // Create a regex that allows any non-digit characters between the digits
+    // This handles DB entries like "+91 98765 43210" or "987-654-3210"
+    const phoneRegexString = corePhone.split('').join('\\D*');
+
+    // Find worker by phone number
+    const worker = await Worker.findOne({ 
+      phone: { $regex: phoneRegexString, $options: 'i' }
+    });
+
+    if (!worker) {
+      // Also try searching in User model
+      const workerUser = await User.findOne({ 
+        phone: { $regex: phoneRegexString, $options: 'i' },
+        role: ROLES.WORKER 
+      });
+
+      if (!workerUser) {
+        return errorResponse(res, 'No worker found with this mobile number. Please ensure the worker is registered on the platform.', 404);
+      }
+
+      // Find worker profile from user
+      const workerProfile = await Worker.findOne({ userId: workerUser._id });
+      if (!workerProfile) {
+        return errorResponse(res, 'Worker profile not found for this user.', 404);
+      }
+
+      // Check if request already exists
+      const existingRequest = await WorkerRequest.findOne({
+        employerId: employer._id,
+        workerId: workerProfile._id,
+        status: 'pending'
+      });
+
+      if (existingRequest) {
+        return errorResponse(res, 'A pending request already exists for this worker.', 409);
+      }
+
+      // Check if worker is already linked (accepted request exists)
+      const acceptedRequest = await WorkerRequest.findOne({
+        employerId: employer._id,
+        workerId: workerProfile._id,
+        status: 'accepted'
+      });
+
+      if (acceptedRequest) {
+        return errorResponse(res, 'This worker is already added to your team.', 409);
+      }
+
+      // Create the request
+      const request = await WorkerRequest.create({
+        employerId: employer._id,
+        employerUserId: req.user.id,
+        workerId: workerProfile._id,
+        workerUserId: workerUser._id,
+        employerName: employer.companyName || req.user.name,
+        workerName: workerProfile.name || workerUser.name,
+        workerPhone: normalizedPhone,
+        message
+      });
+
+      logger.info('Worker request sent', { 
+        employerId: employer._id, 
+        workerId: workerProfile._id,
+        requestId: request._id 
+      });
+
+      return successResponse(res, { request }, 'Worker request sent successfully. The worker will be notified.', 201);
+    }
+
+    // Worker found directly by phone
+    // Check if request already exists
+    const existingRequest = await WorkerRequest.findOne({
+      employerId: employer._id,
+      workerId: worker._id,
+      status: 'pending'
+    });
+
+    if (existingRequest) {
+      return errorResponse(res, 'A pending request already exists for this worker.', 409);
+    }
+
+    // Check if worker is already linked
+    const acceptedRequest = await WorkerRequest.findOne({
+      employerId: employer._id,
+      workerId: worker._id,
+      status: 'accepted'
+    });
+
+    if (acceptedRequest) {
+      return errorResponse(res, 'This worker is already added to your team.', 409);
+    }
+
+    // Create the request
+    const request = await WorkerRequest.create({
+      employerId: employer._id,
+      employerUserId: req.user.id,
+      workerId: worker._id,
+      workerUserId: worker.userId,
+      employerName: employer.companyName || req.user.name,
+      workerName: worker.name,
+      workerPhone: normalizedPhone,
+      message
+    });
+
+    logger.info('Worker request sent', { 
+      employerId: employer._id, 
+      workerId: worker._id,
+      requestId: request._id 
+    });
+
+    return successResponse(res, { request }, 'Worker request sent successfully. The worker will be notified.', 201);
+  })
+);
+
+/**
+ * @route GET /api/employers/profile/workers/requests
+ * @desc Get all worker requests sent by current employer
+ * @access Private (Employer)
+ */
+router.get(
+  '/profile/workers/requests',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const { WorkerRequest } = await import('../models/index.js');
+    
+    const employer = await findEmployerByUserId(req.user.id);
+    if (!employer) {
+      return notFoundResponse(res, 'Employer profile not found');
+    }
+
+    const { status } = req.query;
+    const filter = { employerId: employer._id };
+    if (status && ['pending', 'accepted', 'rejected'].includes(status)) {
+      filter.status = status;
+    }
+
+    const requests = await WorkerRequest.find(filter)
+      .sort({ createdAt: -1 })
+      .populate('workerId', 'name phone')
+      .lean();
+
+    return successResponse(res, { requests });
+  })
+);
+
+/**
+ * @route DELETE /api/employers/profile/workers/requests/:requestId
+ * @desc Cancel a pending worker request
+ * @access Private (Employer)
+ */
+router.delete(
+  '/profile/workers/requests/:requestId',
+  authenticate,
+  validateObjectId('requestId'),
+  asyncHandler(async (req, res) => {
+    const { WorkerRequest } = await import('../models/index.js');
+    
+    const employer = await findEmployerByUserId(req.user.id);
+    if (!employer) {
+      return notFoundResponse(res, 'Employer profile not found');
+    }
+
+    const request = await WorkerRequest.findOne({
+      _id: req.params.requestId,
+      employerId: employer._id,
+      status: 'pending'
+    });
+
+    if (!request) {
+      return notFoundResponse(res, 'Pending request not found');
+    }
+
+    await WorkerRequest.findByIdAndDelete(request._id);
+
+    logger.info('Worker request cancelled', { 
+      employerId: employer._id, 
+      requestId: request._id 
+    });
+
+    return successResponse(res, null, 'Worker request cancelled');
+  })
+);
+
+/**
+ * @route PUT /api/employers/profile/workers/requests/:requestId/read
+ * @desc Mark a request notification as read (employer side)
+ * @access Private (Employer)
+ */
+router.put(
+  '/profile/workers/requests/:requestId/read',
+  authenticate,
+  validateObjectId('requestId'),
+  asyncHandler(async (req, res) => {
+    const { WorkerRequest } = await import('../models/index.js');
+    
+    const request = await WorkerRequest.findOneAndUpdate(
+      { _id: req.params.requestId, employerUserId: req.user.id },
+      { employerNotificationRead: true },
+      { new: true }
+    );
+
+    if (!request) {
+      return notFoundResponse(res, 'Request not found');
+    }
+
+    return successResponse(res, { request }, 'Notification marked as read');
+  })
+);
+
+/**
+ * @route GET /api/employers/profile/notifications
+ * @desc Get employer notifications (unread request responses)
+ * @access Private (Employer)
+ */
+router.get(
+  '/profile/notifications',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const { WorkerRequest } = await import('../models/index.js');
+    
+    const employer = await findEmployerByUserId(req.user.id);
+    if (!employer) {
+      return notFoundResponse(res, 'Employer profile not found');
+    }
+
+    // Get responded requests where employer hasn't read the notification
+    const notifications = await WorkerRequest.find({
+      employerId: employer._id,
+      status: { $in: ['accepted', 'rejected'] },
+      employerNotificationRead: false
+    })
+      .sort({ respondedAt: -1 })
+      .populate('workerId', 'name phone')
+      .lean();
+
+    return successResponse(res, { 
+      notifications,
+      unreadCount: notifications.length 
+    });
+  })
+);
+
 export default router;
+

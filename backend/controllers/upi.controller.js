@@ -1,7 +1,7 @@
 /**
  * UPI Controller
  */
-import { Worker, UPITransaction, WageRecord, QRToken } from '../models/index.js';
+import { Worker, UPITransaction, WageRecord, QRToken, Employer } from '../models/index.js';
 import { generateReferenceNumber } from '../utils/hash.util.js';
 import { successResponse, createdResponse, errorResponse, notFoundResponse } from '../utils/response.util.js';
 import { generatePaymentQR, validateQRToken, useQRToken } from '../services/qr.service.js';
@@ -9,6 +9,18 @@ import { recordWagePayment, recordUPITransaction } from '../services/fabric.serv
 import { isBlockchainEnabled, logBlockchainSkip } from '../config/blockchain.config.js';
 import { logger } from '../utils/logger.util.js';
 import { PAYMENT_STATUS, TRANSACTION_TYPES } from '../config/constants.js';
+
+const findEmployerByUserId = async (userId) => {
+  let employer = await Employer.findOne({ userId });
+  if (!employer) {
+    employer = await Employer.findOne({ user: userId });
+    if (employer && !employer.userId) {
+      employer.userId = userId;
+      await employer.save();
+    }
+  }
+  return employer;
+};
 
 /**
  * Generate payment QR code for a worker
@@ -158,8 +170,7 @@ export const processUPIPayment = async (req, res) => {
     let employer = null;
     let employerIdHash = null;
     if (req.user.role === 'employer') {
-      const { Employer } = await import('../models/index.js');
-      employer = await Employer.findOne({ userId: req.user.id });
+      employer = await findEmployerByUserId(req.user.id);
       employerIdHash = employer?.idHash;
     }
     

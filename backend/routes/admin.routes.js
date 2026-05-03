@@ -16,6 +16,18 @@ import { auditLog } from '../utils/logger.util.js';
 
 const router = Router();
 
+const findProfileByUserId = async (Model, userId) => {
+  let profile = await Model.findOne({ userId });
+  if (!profile) {
+    profile = await Model.findOne({ user: userId });
+    if (profile && !profile.userId) {
+      profile.userId = userId;
+      await profile.save();
+    }
+  }
+  return profile;
+};
+
 // All routes require admin authentication
 router.use(authenticate, adminOnly);
 
@@ -58,7 +70,7 @@ router.get(
       AuditLog.find()
         .sort({ createdAt: -1 })
         .limit(10)
-        .populate('user', 'email role')
+        .populate('userId', 'email role')
     ]);
 
     const stats = {
@@ -128,16 +140,16 @@ router.get(
     let profile = null;
     switch (user.role) {
       case ROLES.WORKER:
-        profile = await Worker.findOne({ user: user._id });
+        profile = await findProfileByUserId(Worker, user._id);
         break;
       case ROLES.EMPLOYER:
-        profile = await Employer.findOne({ user: user._id });
+        profile = await findProfileByUserId(Employer, user._id);
         break;
       case ROLES.GOVERNMENT:
-        profile = await GovOfficial.findOne({ user: user._id });
+        profile = await findProfileByUserId(GovOfficial, user._id);
         break;
       case ROLES.ADMIN:
-        profile = await Admin.findOne({ user: user._id });
+        profile = await findProfileByUserId(Admin, user._id);
         break;
     }
 
@@ -182,16 +194,16 @@ router.post(
     let createdProfile = null;
     switch (role) {
       case ROLES.WORKER:
-        createdProfile = await Worker.create({ user: user._id, ...profile });
+        createdProfile = await Worker.create({ userId: user._id, ...profile });
         break;
       case ROLES.EMPLOYER:
-        createdProfile = await Employer.create({ user: user._id, ...profile });
+        createdProfile = await Employer.create({ userId: user._id, ...profile });
         break;
       case ROLES.GOVERNMENT:
-        createdProfile = await GovOfficial.create({ user: user._id, ...profile });
+        createdProfile = await GovOfficial.create({ userId: user._id, ...profile });
         break;
       case ROLES.ADMIN:
-        createdProfile = await Admin.create({ user: user._id, adminLevel: 'standard', ...profile });
+        createdProfile = await Admin.create({ userId: user._id, adminLevel: 'standard', ...profile });
         break;
     }
 
@@ -347,7 +359,7 @@ router.get(
     const filter = {};
 
     if (action) filter.action = { $regex: action, $options: 'i' };
-    if (userId) filter.user = userId;
+    if (userId) filter.userId = userId;
     if (startDate || endDate) {
       filter.createdAt = {};
       if (startDate) filter.createdAt.$gte = new Date(startDate);
@@ -355,7 +367,7 @@ router.get(
     }
 
     const { data, pagination } = await paginateQuery(AuditLog, filter, req.query, {
-      populate: { path: 'user', select: 'email role' },
+      populate: { path: 'userId', select: 'email role' },
       defaultSort: '-createdAt'
     });
 

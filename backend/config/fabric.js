@@ -256,11 +256,26 @@ const loadCredentials = async () => {
  * Create gRPC client connection
  */
 const createGrpcClient = async (tlsCertificate) => {
+  if (process.env.FABRIC_TLS_INSECURE === 'true') {
+    logger.warn('FABRIC_TLS_INSECURE=true - using insecure gRPC connection');
+    return new grpc.Client(
+      FABRIC_CONFIG.peerEndpoint,
+      grpc.credentials.createInsecure(),
+      {
+        'grpc.ssl_target_name_override': FABRIC_CONFIG.peerHostAlias,
+        'grpc.default_authority': FABRIC_CONFIG.peerHostAlias
+      }
+    );
+  }
+
   const tlsCredentials = grpc.credentials.createSsl(tlsCertificate);
   return new grpc.Client(
     FABRIC_CONFIG.peerEndpoint,
     tlsCredentials,
-    { 'grpc.ssl_target_name_override': FABRIC_CONFIG.peerHostAlias }
+    {
+      'grpc.ssl_target_name_override': FABRIC_CONFIG.peerHostAlias,
+      'grpc.default_authority': FABRIC_CONFIG.peerHostAlias
+    }
   );
 };
 

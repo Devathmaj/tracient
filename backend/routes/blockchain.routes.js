@@ -846,26 +846,37 @@ router.get(
     const { page = 1, limit = 50, status = 'all' } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
     
-    // Import UPITransaction model
-    const { UPITransaction } = await import('../models/index.js');
+    // Import UPITransaction and WageRecord models
+    const { UPITransaction, WageRecord } = await import('../models/index.js');
     
-    // Only query UPITransaction - this is the single source of truth for payments
-    // WageRecord is for income tracking, not for blockchain transaction display
+    // Query on-chain transactions
     const upiQuery = { verifiedOnChain: true };
     if (status === 'pending') {
       upiQuery.verifiedOnChain = false;
     }
+
+    const wageQuery = { verifiedOnChain: true };
+    if (status === 'pending') {
+      wageQuery.verifiedOnChain = false;
+    }
     
-    const total = await UPITransaction.countDocuments(upiQuery);
+    const [upiTotal, wageTotal] = await Promise.all([
+      UPITransaction.countDocuments(upiQuery),
+      WageRecord.countDocuments(wageQuery)
+    ]);
+
     const upiTransactions = await UPITransaction.find(upiQuery)
       .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit))
+      .populate('workerId', 'name idHash')
+      .lean();
+
+    const wageRecords = await WageRecord.find(wageQuery)
+      .sort({ createdAt: -1 })
       .populate('workerId', 'name idHash')
       .lean();
 
     // Format transactions with sender and recipient info
-    const transactions = upiTransactions.map(tx => ({
+    const upiFormatted = upiTransactions.map(tx => ({
       id: tx._id,
       type: tx.mode === 'QR_SCAN' ? 'QR' : 'UPI',
       txId: tx.blockchainTxId || tx.txId,
@@ -890,17 +901,55 @@ router.get(
       completedAt: tx.completedAt
     }));
 
+    const wageFormatted = wageRecords.map(wage => ({
+      id: wage._id,
+      type: 'WAGE',
+      txId: wage.blockchainTxId || wage.referenceNumber,
+      amount: wage.amount,
+      currency: 'INR',
+      senderName: wage.incomeSource || 'Employer',
+      senderPhone: '',
+      senderAccount: '',
+      recipientName: wage.workerId?.name || 'Unknown',
+      recipientIdHash: wage.workerIdHash,
+      recipientAccount: '',
+      paymentMethod: wage.paymentMethod || 'wage',
+      status: wage.status,
+      blockchainTxId: wage.blockchainTxId,
+      verifiedOnChain: wage.verifiedOnChain,
+      transactionRef: wage.referenceNumber,
+      remarks: wage.description || '',
+      createdAt: wage.createdAt,
+      completedAt: wage.completedAt
+    }));
+
+    const transactions = [...upiFormatted, ...wageFormatted]
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .slice(skip, skip + parseInt(limit));
+
     // Summary stats
-    const totalOnChain = await UPITransaction.countDocuments({ verifiedOnChain: true });
-    const totalAll = await UPITransaction.countDocuments({});
+    const [totalOnChainUpi, totalOnChainWage, totalAllUpi, totalAllWage] = await Promise.all([
+      UPITransaction.countDocuments({ verifiedOnChain: true }),
+      WageRecord.countDocuments({ verifiedOnChain: true }),
+      UPITransaction.countDocuments({}),
+      WageRecord.countDocuments({})
+    ]);
+    const totalOnChain = totalOnChainUpi + totalOnChainWage;
+    const totalAll = totalAllUpi + totalAllWage;
     const totalPending = totalAll - totalOnChain;
 
     // Total amount on chain
-    const amountAgg = await UPITransaction.aggregate([
-      { $match: { verifiedOnChain: true } },
-      { $group: { _id: null, total: { $sum: '$amount' } } }
+    const [upiAmountAgg, wageAmountAgg] = await Promise.all([
+      UPITransaction.aggregate([
+        { $match: { verifiedOnChain: true } },
+        { $group: { _id: null, total: { $sum: '$amount' } } }
+      ]),
+      WageRecord.aggregate([
+        { $match: { verifiedOnChain: true } },
+        { $group: { _id: null, total: { $sum: '$amount' } } }
+      ])
     ]);
-    const totalAmountOnChain = amountAgg[0]?.total || 0;
+    const totalAmountOnChain = (upiAmountAgg[0]?.total || 0) + (wageAmountAgg[0]?.total || 0);
 
     return successResponse(res, {
       transactions,
@@ -916,7 +965,7 @@ router.get(
       pagination: {
         page: parseInt(page),
         limit: parseInt(limit),
-        total
+        total: upiTotal + wageTotal
       }
     }, 'Blockchain transactions retrieved');
   })

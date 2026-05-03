@@ -31,6 +31,7 @@ const FamilySurvey: React.FC = () => {
   const [errors, setErrors] = useState<FormErrors>({});
   const [showClassificationResult, setShowClassificationResult] = useState(false);
   const [classificationResult, setClassificationResult] = useState<ClassificationResult | null>(null);
+  const [decimalInputText, setDecimalInputText] = useState<Record<string, string>>({});
   
   // Check if survey already exists
   React.useEffect(() => {
@@ -140,6 +141,9 @@ const FamilySurvey: React.FC = () => {
 
     // Allow empty string so user can clear field
     if (value === '') {
+      if (config.allowDecimal) {
+        setDecimalInputText(prev => ({ ...prev, [name]: '' }));
+      }
       setFormData(prev => ({ ...prev, [name]: 0 }));
       return;
     }
@@ -147,6 +151,11 @@ const FamilySurvey: React.FC = () => {
     // Filter: allow only digits and optionally one decimal point
     const pattern = config.allowDecimal ? /^[0-9]*\.?[0-9]*$/ : /^[0-9]*$/;
     if (!pattern.test(value)) return; // reject non-numeric characters
+
+    if (config.allowDecimal) {
+      setDecimalInputText(prev => ({ ...prev, [name]: value }));
+      if (value === '.' || value.endsWith('.')) return;
+    }
 
     const num = config.allowDecimal ? parseFloat(value) : parseInt(value, 10);
     if (isNaN(num)) return;
@@ -591,7 +600,9 @@ const FamilySurvey: React.FC = () => {
               type="text"
               inputMode="decimal"
               name="total_land_acres"
-              value={formData.total_land_acres}
+              value={decimalInputText.total_land_acres !== undefined
+                ? decimalInputText.total_land_acres
+                : formData.total_land_acres}
               onChange={handleNumericInput}
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
               placeholder="e.g. 2.5 (max 999)"
@@ -606,7 +617,9 @@ const FamilySurvey: React.FC = () => {
               type="text"
               inputMode="decimal"
               name="irrigated_land_acres"
-              value={formData.irrigated_land_acres}
+              value={decimalInputText.irrigated_land_acres !== undefined
+                ? decimalInputText.irrigated_land_acres
+                : formData.irrigated_land_acres}
               onChange={handleNumericInput}
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
               placeholder="e.g. 1.25 (max 999)"

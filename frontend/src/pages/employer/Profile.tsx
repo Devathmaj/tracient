@@ -48,7 +48,6 @@ const Profile: React.FC = () => {
     paymentConfirmation: true,
     workerAlerts: true,
     complianceReminders: true,
-    monthlyReports: false,
   });
 
   useEffect(() => {
@@ -261,7 +260,6 @@ const Profile: React.FC = () => {
                 paymentConfirmation: { label: 'Payment Confirmations', desc: 'Get notified when payments are confirmed on blockchain' },
                 workerAlerts: { label: 'Worker Alerts', desc: 'Alerts about worker status changes' },
                 complianceReminders: { label: 'Compliance Reminders', desc: 'Reminders about compliance deadlines' },
-                monthlyReports: { label: 'Monthly Reports', desc: 'Receive monthly summary reports' },
               }).map(([key, { label, desc }]) => (
                 <div key={key} className="flex items-center justify-between p-4 border rounded-lg">
                   <div>

@@ -97,29 +97,43 @@ export const getNetworkStatus = async () => {
  */
 export const recordWagePayment = async (wageData) => {
   try {
-    const { workerId, workerIdHash, employerId, amount, referenceNumber, timestamp } = wageData;
-    
+    const {
+      workerIdHash,
+      employerIdHash,
+      amount,
+      referenceNumber,
+      timestamp,
+      jobType,
+      policyVersion
+    } = wageData;
+
+    if (!isFabricConnected()) {
+      logger.warn('Blockchain not connected - wage recorded in database only');
+      return { success: false, mock: true, error: 'Blockchain not connected' };
+    }
+
+    const wageId = referenceNumber || `WAGE-${Date.now()}`;
     const txHash = generateTransactionHash({
       workerIdHash,
-      employerId,
+      employerIdHash,
       amount,
-      referenceNumber
+      referenceNumber: wageId
     });
-    
+
     const result = await submitTransaction(
       'RecordWage',
-      JSON.stringify({
-        txId: txHash,
-        workerHash: workerIdHash,
-        employerId: employerId.toString(),
-        amount: amount.toString(),
-        referenceNumber,
-        timestamp: timestamp || new Date().toISOString()
-      })
+      wageId,
+      workerIdHash,
+      employerIdHash,
+      amount.toString(),
+      'INR',
+      jobType || 'labor',
+      (timestamp ? new Date(timestamp) : new Date()).toISOString(),
+      policyVersion || '2025-Q4'
     );
-    
+
     logger.info('Wage payment recorded on blockchain', { txHash, workerIdHash, amount });
-    return { success: true, txHash, result };
+    return { success: true, txHash, wageId, result };
   } catch (error) {
     logger.error('Failed to record wage on blockchain:', error.message);
     return { success: false, error: error.message };

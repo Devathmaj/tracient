@@ -85,7 +85,7 @@ const AdminDashboard: React.FC = () => {
           const recentActivity = (apiStats.recentActivity || []).slice(0, 5).map((log: any, index: number) => ({
             id: log._id || String(index),
             action: log.action?.replace(/\./g, ' ').replace(/([A-Z])/g, ' $1').trim() || 'System event',
-            user: log.user?.email || 'System',
+            user: log.userId?.email || 'System',
             time: formatTimeAgo(new Date(log.createdAt)),
             type: log.action?.includes('delete') ? 'warning' : 
                   log.action?.includes('create') || log.action?.includes('register') ? 'success' : 'info'

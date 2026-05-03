@@ -12,6 +12,18 @@ import { logger } from '../utils/logger.util.js';
 import { PAYMENT_STATUS, TRANSACTION_TYPES } from '../config/constants.js';
 import { isBlockchainEnabled, logBlockchainSkip } from '../config/blockchain.config.js';
 
+const findEmployerByUserId = async (userId) => {
+  let employer = await Employer.findOne({ userId });
+  if (!employer) {
+    employer = await Employer.findOne({ user: userId });
+    if (employer && !employer.userId) {
+      employer.userId = userId;
+      await employer.save();
+    }
+  }
+  return employer;
+};
+
 /**
  * Create a wage payment
  */
@@ -46,11 +58,13 @@ export const createWagePayment = async (req, res) => {
     
     // Get employer (if employer role)
     let employer = null;
+    let employerIdHash = null;
     if (req.user.role === 'employer') {
-      employer = await Employer.findOne({ userId: req.user.id });
+      employer = await findEmployerByUserId(req.user.id);
       if (!employer) {
         return errorResponse(res, 'Employer profile not found', 400);
       }
+      employerIdHash = req.user.idHash || `EMPLOYER-${employer._id.toString()}`;
     }
     
     // Generate reference number
@@ -134,25 +148,30 @@ export const createWagePayment = async (req, res) => {
       note: 'Payment completed'
     });
     
+    let blockchainResult = { success: false, mock: false, error: undefined };
+
     // Record on blockchain (only if enabled)
     if (isBlockchainEnabled()) {
-      const blockchainResult = await recordWagePayment({
-        workerId: worker._id,
+      blockchainResult = await recordWagePayment({
         workerIdHash,
-        employerId: employer?._id,
+        employerIdHash: employerIdHash || 'SELF_DECLARED',
         amount,
         referenceNumber,
-        timestamp: new Date()
+        timestamp: new Date(),
+        jobType: jobType || description || 'labor',
+        policyVersion: '2025-Q4'
       });
       
       if (blockchainResult.success) {
         wageRecord.verifiedOnChain = true;
-        wageRecord.blockchainTxId = blockchainResult.txHash;
+        wageRecord.blockchainTxId = blockchainResult.wageId || blockchainResult.txHash;
+        wageRecord.syncedToBlockchain = true;
       }
     } else {
       logBlockchainSkip('RecordWagePayment', logger);
       wageRecord.verifiedOnChain = false;
       wageRecord.syncedToBlockchain = false;
+      blockchainResult = { success: false, mock: true, error: 'Blockchain disabled' };
     }
     
     await wageRecord.save();
@@ -193,6 +212,11 @@ export const createWagePayment = async (req, res) => {
         blockchainTxId: wageRecord.blockchainTxId,
         workerName: worker.name
       },
+      blockchain: {
+        recorded: blockchainResult.success,
+        mock: blockchainResult.mock || false,
+        error: blockchainResult.success ? undefined : blockchainResult.error
+      },
       anomalyWarning: anomalyResult.isAnomaly ? {
         type: anomalyResult.anomalyType,
         confidence: anomalyResult.confidence
@@ -219,7 +243,7 @@ export const getTransactions = async (req, res) => {
       const worker = await Worker.findOne({ userId: req.user.id });
       query.workerId = worker?._id;
     } else if (req.user.role === 'employer') {
-      const employer = await Employer.findOne({ userId: req.user.id });
+      const employer = await findEmployerByUserId(req.user.id);
       query.employerId = employer?._id;
     }
     
@@ -294,7 +318,7 @@ export const getTransactionStats = async (req, res) => {
     
     // Apply role-based filtering
     if (req.user.role === 'employer') {
-      const employer = await Employer.findOne({ userId: req.user.id });
+      const employer = await findEmployerByUserId(req.user.id);
       if (employer) matchStage.employerId = employer._id;
     }
     
@@ -388,7 +412,7 @@ export const processBulkTransactions = async (req, res) => {
   try {
     const { transactions } = req.body;
     
-    const employer = await Employer.findOne({ userId: req.user.id });
+    const employer = await findEmployerByUserId(req.user.id);
     if (!employer && req.user.role === 'employer') {
       return errorResponse(res, 'Employer profile not found', 400);
     }

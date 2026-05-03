@@ -25,6 +25,7 @@ import { formatCurrency, formatDate } from '@/utils/formatters';
 import { CHART_COLORS, WELFARE_SCHEMES, BPL_THRESHOLD } from '@/utils/constants';
 import { familyService } from '@/services';
 import { Family } from '@/types/family';
+import { useWorkerBankAccounts } from '@/hooks/useWorkerBankAccounts';
 import api from '@/services/api';
 
 interface WelfareSchemeFromAPI {
@@ -79,29 +80,24 @@ interface BPLStatusData {
   }[];
 }
 
-const mockBPLData: BPLStatusData = {
-  status: 'eligible',
-  annualIncome: 125000,
-  threshold: BPL_THRESHOLD,
-  lastVerified: new Date().toISOString(),
-  certificateId: 'BPL-2024-123456',
-  eligibleSchemes: WELFARE_SCHEMES.map((name, index) => ({
-    id: `scheme-${index + 1}`,
-    name: name,
-    description: `Government welfare scheme for BPL families`
-  })),
-  incomeBreakdown: [
-    { source: 'Construction Work', amount: 50000, percentage: 40 },
-    { source: 'Agricultural Labor', amount: 35000, percentage: 28 },
-    { source: 'Daily Wages', amount: 25000, percentage: 20 },
-    { source: 'Other', amount: 15000, percentage: 12 },
-  ],
-  verificationHistory: [
-    { date: '2024-06-01', status: 'eligible', income: 125000 },
-    { date: '2024-03-01', status: 'eligible', income: 118000 },
-    { date: '2023-12-01', status: 'eligible', income: 95000 },
-    { date: '2023-09-01', status: 'not_eligible', income: 165000 },
-  ],
+const buildBplData = (annualIncome: number, hasLinkedAccounts: boolean): BPLStatusData => {
+  const status: BPLStatusData['status'] = hasLinkedAccounts
+    ? (annualIncome <= BPL_THRESHOLD ? 'eligible' : 'not_eligible')
+    : 'pending';
+
+  return {
+    status,
+    annualIncome,
+    threshold: BPL_THRESHOLD,
+    lastVerified: new Date().toISOString(),
+    eligibleSchemes: WELFARE_SCHEMES.map((name, index) => ({
+      id: `scheme-${index + 1}`,
+      name,
+      description: 'Government welfare scheme for BPL families'
+    })),
+    incomeBreakdown: [],
+    verificationHistory: []
+  };
 };
 
 const BPLStatus: React.FC = () => {
@@ -112,11 +108,47 @@ const BPLStatus: React.FC = () => {
   const [classificationMessage, setClassificationMessage] = useState<string | null>(null);
   const [classificationError, setClassificationError] = useState<string | null>(null);
   const [liveSchemes, setLiveSchemes] = useState<WelfareSchemeFromAPI[]>([]);
+  const {
+    accounts,
+    totalMonthlyIncome,
+    loading: accountsLoading,
+    error: accountsError
+  } = useWorkerBankAccounts();
 
   useEffect(() => {
     fetchData();
     fetchLiveSchemes();
   }, []);
+
+  useEffect(() => {
+    if (accountsLoading) return;
+
+    const hasLinkedAccounts = accounts.length > 0;
+    const annualIncome = hasLinkedAccounts ? totalMonthlyIncome * 12 : 0;
+    const baseData = buildBplData(annualIncome, hasLinkedAccounts);
+    const totalAnnualFromAccounts = accounts.reduce(
+      (sum, account) => sum + (account.monthlyIncome || 0) * 12,
+      0
+    );
+
+    const incomeBreakdown = hasLinkedAccounts
+      ? accounts.map((account) => {
+          const amount = (account.monthlyIncome || 0) * 12;
+          const percentage = totalAnnualFromAccounts > 0
+            ? Math.round((amount / totalAnnualFromAccounts) * 100)
+            : 0;
+          const label = account.accountNumberMasked
+            ? `${account.bankName} • ${account.accountNumberMasked}`
+            : account.bankName;
+          return { source: label, amount, percentage };
+        })
+      : [];
+
+    setData({
+      ...baseData,
+      incomeBreakdown
+    });
+  }, [accounts, accountsLoading, totalMonthlyIncome]);
 
   const fetchLiveSchemes = async () => {
     try {
@@ -134,12 +166,8 @@ const BPLStatus: React.FC = () => {
     try {
       const familyData = await familyService.getMyFamily();
       setFamily(familyData.family);
-      // Use mock data for income breakdown visualization, but real family classification
-      setData(mockBPLData);
     } catch (error) {
       console.error('Error fetching family data:', error);
-      // Fall back to mock data
-      setData(mockBPLData);
     } finally {
       setIsLoading(false);
     }
@@ -177,7 +205,7 @@ const BPLStatus: React.FC = () => {
     }
   };
 
-  if (isLoading || !data) {
+  if (isLoading || accountsLoading || !data) {
     return (
       <div className="flex items-center justify-center h-96">
         <Spinner size="lg" />
@@ -185,7 +213,11 @@ const BPLStatus: React.FC = () => {
     );
   }
 
-  const incomePercentage = (data.annualIncome / data.threshold) * 100;
+  const hasLinkedAccounts = accounts.length > 0;
+
+  const incomePercentage = data.annualIncome > 0
+    ? (data.annualIncome / data.threshold) * 100
+    : 0;
   const remainingBuffer = data.threshold - data.annualIncome;
 
   const pieChartData = data.incomeBreakdown.map(item => ({
@@ -322,26 +354,40 @@ const BPLStatus: React.FC = () => {
               <p className="text-sm text-gray-500">Your Annual Income</p>
               <IndianRupee className="h-5 w-5 text-gray-400" />
             </div>
-            <p className="text-3xl font-bold text-gray-900">{formatCurrency(data.annualIncome)}</p>
-            <div className="mt-4">
-              <div className="flex items-center justify-between text-sm mb-2">
-                <span className="text-gray-500">Threshold: {formatCurrency(data.threshold)}</span>
-                <span className={`font-medium ${data.status === 'eligible' ? 'text-green-600' : 'text-red-600'}`}>
-                  {incomePercentage.toFixed(1)}%
-                </span>
-              </div>
-              <div className="h-3 bg-gray-200 rounded-full overflow-hidden">
-                <div 
-                  className={`h-full rounded-full transition-all ${data.status === 'eligible' ? 'bg-green-500' : 'bg-red-500'}`}
-                  style={{ width: `${Math.min(incomePercentage, 100)}%` }}
-                />
-              </div>
-              {data.status === 'eligible' && (
-                <p className="text-sm text-gray-500 mt-2">
-                  Buffer remaining: <span className="font-medium text-green-600">{formatCurrency(remainingBuffer)}</span>
+            {hasLinkedAccounts ? (
+              <>
+                <p className="text-3xl font-bold text-gray-900">{formatCurrency(data.annualIncome)}</p>
+                <div className="mt-4">
+                  <div className="flex items-center justify-between text-sm mb-2">
+                    <span className="text-gray-500">Threshold: {formatCurrency(data.threshold)}</span>
+                    <span className={`font-medium ${data.status === 'eligible' ? 'text-green-600' : 'text-red-600'}`}>
+                      {incomePercentage.toFixed(1)}%
+                    </span>
+                  </div>
+                  <div className="h-3 bg-gray-200 rounded-full overflow-hidden">
+                    <div 
+                      className={`h-full rounded-full transition-all ${data.status === 'eligible' ? 'bg-green-500' : 'bg-red-500'}`}
+                      style={{ width: `${Math.min(incomePercentage, 100)}%` }}
+                    />
+                  </div>
+                  {data.status === 'eligible' && (
+                    <p className="text-sm text-gray-500 mt-2">
+                      Buffer remaining: <span className="font-medium text-green-600">{formatCurrency(remainingBuffer)}</span>
+                    </p>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="mt-2">
+                <p className="text-lg font-semibold text-gray-800">Link a bank account</p>
+                <p className="text-sm text-gray-500 mt-1">
+                  Your annual income will appear once an account is connected.
                 </p>
-              )}
-            </div>
+                {accountsError && (
+                  <p className="text-xs text-red-600 mt-2">{accountsError}</p>
+                )}
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -352,39 +398,45 @@ const BPLStatus: React.FC = () => {
             <CardDescription>Distribution of your income by source</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="flex flex-col md:flex-row items-center gap-6">
-              <div className="w-48 h-48">
-                <CustomPieChart
-                  data={pieChartData}
-                  height={180}
-                />
-              </div>
-              <div className="flex-1 space-y-3">
-                {data.incomeBreakdown.map((item, index) => (
-                  <div key={item.source} className="flex items-center gap-3">
-                    <div 
-                      className="w-3 h-3 rounded-full"
-                      style={{ backgroundColor: CHART_COLORS.array[index % CHART_COLORS.array.length] }}
-                    />
-                    <div className="flex-1">
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-gray-600">{item.source}</span>
-                        <span className="text-sm font-medium text-gray-900">{formatCurrency(item.amount)}</span>
-                      </div>
-                      <div className="h-1.5 bg-gray-100 rounded-full mt-1">
-                        <div 
-                          className="h-full rounded-full"
-                          style={{ 
-                            width: `${item.percentage}%`,
-                            backgroundColor: CHART_COLORS.array[index % CHART_COLORS.array.length]
-                          }}
-                        />
+            {hasLinkedAccounts && data.incomeBreakdown.length > 0 ? (
+              <div className="flex flex-col md:flex-row items-center gap-6">
+                <div className="w-48 h-48">
+                  <CustomPieChart
+                    data={pieChartData}
+                    height={180}
+                  />
+                </div>
+                <div className="flex-1 space-y-3">
+                  {data.incomeBreakdown.map((item, index) => (
+                    <div key={item.source} className="flex items-center gap-3">
+                      <div 
+                        className="w-3 h-3 rounded-full"
+                        style={{ backgroundColor: CHART_COLORS.array[index % CHART_COLORS.array.length] }}
+                      />
+                      <div className="flex-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-gray-600">{item.source}</span>
+                          <span className="text-sm font-medium text-gray-900">{formatCurrency(item.amount)}</span>
+                        </div>
+                        <div className="h-1.5 bg-gray-100 rounded-full mt-1">
+                          <div 
+                            className="h-full rounded-full"
+                            style={{ 
+                              width: `${item.percentage}%`,
+                              backgroundColor: CHART_COLORS.array[index % CHART_COLORS.array.length]
+                            }}
+                          />
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="text-sm text-gray-500">
+                Link a bank account to see an income breakdown by source.
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

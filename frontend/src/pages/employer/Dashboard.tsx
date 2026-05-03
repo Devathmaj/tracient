@@ -8,7 +8,6 @@ import {
   Calendar,
   ArrowRight,
   Upload,
-  FileText,
   Plus,
   IndianRupee,
   Clock,
@@ -231,17 +230,6 @@ const EmployerDashboard: React.FC = () => {
               </div>
               <p className="font-medium text-gray-900">Workers</p>
               <p className="text-xs text-gray-500 mt-1">Manage workforce</p>
-            </CardContent>
-          </Card>
-        </Link>
-        <Link to="/employer/reports" className="block">
-          <Card className="hover:shadow-md transition-shadow cursor-pointer h-full">
-            <CardContent className="p-4 flex flex-col items-center justify-center text-center">
-              <div className="p-3 rounded-xl bg-orange-100 mb-3">
-                <FileText className="h-6 w-6 text-orange-600" />
-              </div>
-              <p className="font-medium text-gray-900">Reports</p>
-              <p className="text-xs text-gray-500 mt-1">View analytics</p>
             </CardContent>
           </Card>
         </Link>

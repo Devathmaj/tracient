@@ -1,5 +1,5 @@
 import React from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { 
   LayoutDashboard, 
   Wallet, 
@@ -21,7 +21,9 @@ import {
   X,
   UsersRound,
   CreditCard,
-  Database
+  Database,
+  ArrowRightLeft,
+  Briefcase
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { cn } from '@/utils/helpers';
@@ -37,9 +39,11 @@ interface NavItem {
   icon: React.ElementType;
   path: string;
   badge?: string | number;
+  highlight?: boolean;
+  onClick?: () => void;
 }
 
-const getNavItems = (role: UserRole): NavItem[] => {
+const getNavItems = (role: UserRole, isAlsoEmployer: boolean, userId: string): NavItem[] => {
   switch (role) {
     case 'worker':
       return [
@@ -50,6 +54,10 @@ const getNavItems = (role: UserRole): NavItem[] => {
         { label: 'Family', icon: UsersRound, path: '/worker/family' },
         { label: 'Payments', icon: QrCode, path: '/worker/generate-qr' },
         { label: 'Profile', icon: UserCog, path: '/worker/profile' },
+        // Dynamic employer item
+        isAlsoEmployer
+          ? { label: 'Redirect to Employer', icon: ArrowRightLeft, path: '/worker/apply-employer', highlight: true }
+          : { label: 'Apply to be an Employer', icon: Briefcase, path: '/worker/apply-employer', highlight: true },
       ];
     case 'employer':
       return [
@@ -61,7 +69,10 @@ const getNavItems = (role: UserRole): NavItem[] => {
         { label: 'Payment History', icon: History, path: '/employer/payments' },
         { label: 'Welfare Schemes', icon: Heart, path: '/employer/welfare' },
         { label: 'Send Payment', icon: QrCode, path: '/scan-qr' },
-        { label: 'Reports', icon: FileText, path: '/employer/reports' },
+        // Add "Redirect to Worker" for employers who were originally workers
+        ...(localStorage.getItem(`isAlsoEmployer_${userId}`) === 'true' 
+          ? [{ label: 'Redirect to Worker', icon: ArrowRightLeft, path: '#redirect-worker', highlight: true } as NavItem] 
+          : []),
       ];
     case 'government':
       return [
@@ -90,9 +101,11 @@ const getNavItems = (role: UserRole): NavItem[] => {
 };
 
 const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
-  const { user } = useAuth();
+  const { user, updateUser } = useAuth();
   const location = useLocation();
-  const navItems = user ? getNavItems(user.role) : [];
+  const navigate = useNavigate();
+  const isAlsoEmployer = localStorage.getItem(`isAlsoEmployer_${user?.id || ''}`) === 'true';
+  const navItems = user ? getNavItems(user.role, isAlsoEmployer, user.id) : [];
 
   const getRoleColor = (role: UserRole): string => {
     switch (role) {
@@ -107,6 +120,18 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
       default:
         return 'from-gray-600 to-gray-700';
     }
+  };
+
+  const handleNavClick = (item: NavItem) => {
+    // Handle "Redirect to Worker" special action
+    if (item.path === '#redirect-worker' && user) {
+      const workerUser = { ...user, role: 'worker' as const };
+      updateUser(workerUser);
+      navigate('/worker/dashboard');
+      onClose();
+      return;
+    }
+    onClose();
   };
 
   return (
@@ -147,20 +172,41 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
           {navItems.map((item) => {
             const isActive = location.pathname === item.path;
             const Icon = item.icon;
+            const isSpecialAction = item.path === '#redirect-worker';
             
+            if (isSpecialAction) {
+              return (
+                <button
+                  key={item.path}
+                  onClick={() => handleNavClick(item)}
+                  className={cn(
+                    'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all w-full',
+                    item.highlight
+                      ? 'bg-gradient-to-r from-amber-50 to-orange-50 text-amber-700 border border-amber-200 hover:from-amber-100 hover:to-orange-100'
+                      : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+                  )}
+                >
+                  <Icon className={cn('h-5 w-5', item.highlight ? 'text-amber-600' : 'text-gray-400')} />
+                  <span className="flex-1 text-left">{item.label}</span>
+                </button>
+              );
+            }
+
             return (
               <Link
                 key={item.path}
                 to={item.path}
-                onClick={onClose}
+                onClick={() => handleNavClick(item)}
                 className={cn(
                   'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
                   isActive
                     ? 'bg-primary-50 text-primary-700'
+                    : item.highlight
+                    ? 'bg-gradient-to-r from-amber-50 to-orange-50 text-amber-700 border border-amber-200 hover:from-amber-100 hover:to-orange-100'
                     : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
                 )}
               >
-                <Icon className={cn('h-5 w-5', isActive ? 'text-primary-600' : 'text-gray-400')} />
+                <Icon className={cn('h-5 w-5', isActive ? 'text-primary-600' : item.highlight ? 'text-amber-600' : 'text-gray-400')} />
                 <span className="flex-1">{item.label}</span>
                 {item.badge && (
                   <span className="px-2 py-0.5 text-xs font-medium bg-red-100 text-red-700 rounded-full">

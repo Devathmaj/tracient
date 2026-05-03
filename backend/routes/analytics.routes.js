@@ -14,6 +14,18 @@ import { Worker, Employer, WageRecord, AnomalyAlert, UPITransaction } from '../m
 
 const router = Router();
 
+const findEmployerByUserId = async (userId) => {
+  let employer = await Employer.findOne({ userId });
+  if (!employer) {
+    employer = await Employer.findOne({ user: userId });
+    if (employer && !employer.userId) {
+      employer.userId = userId;
+      await employer.save();
+    }
+  }
+  return employer;
+};
+
 /**
  * @route GET /api/analytics/overview
  * @desc Get system-wide analytics overview
@@ -272,7 +284,7 @@ router.get(
 
     const filter = {};
     if (req.user.role === ROLES.EMPLOYER) {
-      const employer = await Employer.findOne({ user: req.user.id });
+      const employer = await findEmployerByUserId(req.user.id);
       if (employer) filter.employer = employer._id;
     }
 
@@ -327,7 +339,7 @@ router.get(
     // Authorization check
     if (req.user.role !== ROLES.ADMIN && 
         req.user.role !== ROLES.GOVERNMENT && 
-        employer.user.toString() !== req.user.id) {
+        employer.userId.toString() !== req.user.id) {
       throw new AppError('Unauthorized', 403);
     }
 

@@ -19,6 +19,18 @@ import { ROLES } from '../config/constants.js';
 
 const router = Router();
 
+const findWorkerByUserId = async (userId) => {
+  let worker = await Worker.findOne({ userId });
+  if (!worker) {
+    worker = await Worker.findOne({ user: userId });
+    if (worker && !worker.userId) {
+      worker.userId = userId;
+      await worker.save();
+    }
+  }
+  return worker;
+};
+
 /**
  * @route GET /api/workers/profile
  * @desc Get current worker's profile
@@ -422,4 +434,151 @@ router.delete(
   workerController.deleteWorker
 );
 
+// ============================================================================
+// WORKER REQUEST ROUTES - Worker receives/responds to employer requests
+// ============================================================================
+
+/**
+ * @route GET /api/workers/profile/requests
+ * @desc Get all incoming worker requests for the current worker
+ * @access Private (Worker)
+ */
+router.get(
+  '/profile/requests',
+  authenticate,
+  async (req, res) => {
+    try {
+      const { WorkerRequest } = await import('../models/index.js');
+      const { Worker: WorkerModel } = await import('../models/index.js');
+      const { successResponse, notFoundResponse } = await import('../utils/response.util.js');
+      
+      const worker = await findWorkerByUserId(req.user.id);
+      if (!worker) {
+        return notFoundResponse(res, 'Worker profile not found');
+      }
+
+      const { status } = req.query;
+      const filter = { workerId: worker._id };
+      if (status && ['pending', 'accepted', 'rejected'].includes(status)) {
+        filter.status = status;
+      }
+
+      const requests = await WorkerRequest.find(filter)
+        .sort({ createdAt: -1 })
+        .lean();
+
+      return successResponse(res, { requests });
+    } catch (error) {
+      const { errorResponse } = await import('../utils/response.util.js');
+      return errorResponse(res, error.message, 500);
+    }
+  }
+);
+
+/**
+ * @route PUT /api/workers/profile/requests/:requestId/respond
+ * @desc Accept or reject a worker request
+ * @access Private (Worker)
+ */
+router.put(
+  '/profile/requests/:requestId/respond',
+  authenticate,
+  async (req, res) => {
+    try {
+      const { WorkerRequest } = await import('../models/index.js');
+      const { Worker: WorkerModel } = await import('../models/index.js');
+      const { successResponse, notFoundResponse, errorResponse } = await import('../utils/response.util.js');
+      
+      const worker = await findWorkerByUserId(req.user.id);
+      if (!worker) {
+        return notFoundResponse(res, 'Worker profile not found');
+      }
+
+      const { action } = req.body;
+      if (!action || !['accept', 'reject'].includes(action)) {
+        return errorResponse(res, 'Invalid action. Must be "accept" or "reject".', 400);
+      }
+
+      const request = await WorkerRequest.findOne({
+        _id: req.params.requestId,
+        workerId: worker._id,
+        status: 'pending'
+      });
+
+      if (!request) {
+        return notFoundResponse(res, 'Pending request not found');
+      }
+
+      request.status = action === 'accept' ? 'accepted' : 'rejected';
+      request.respondedAt = new Date();
+      request.workerNotificationRead = true;
+      // Reset employer notification so they get notified of the response
+      request.employerNotificationRead = false;
+      await request.save();
+
+      // If accepted, update the worker's currentEmployerId
+      if (action === 'accept') {
+        const { Employer } = await import('../models/index.js');
+        worker.currentEmployerId = request.employerId;
+        await worker.save();
+
+        // Update employer worker count
+        const acceptedCount = await WorkerRequest.countDocuments({
+          employerId: request.employerId,
+          status: 'accepted'
+        });
+        await Employer.findByIdAndUpdate(request.employerId, {
+          activeWorkers: acceptedCount,
+          totalWorkers: acceptedCount
+        });
+      }
+
+      const statusText = action === 'accept' ? 'accepted' : 'rejected';
+      return successResponse(res, { request }, `Worker request ${statusText} successfully`);
+    } catch (error) {
+      const { errorResponse } = await import('../utils/response.util.js');
+      return errorResponse(res, error.message, 500);
+    }
+  }
+);
+
+/**
+ * @route GET /api/workers/profile/notifications
+ * @desc Get worker notifications (pending requests count)
+ * @access Private (Worker)
+ */
+router.get(
+  '/profile/notifications',
+  authenticate,
+  async (req, res) => {
+    try {
+      const { WorkerRequest } = await import('../models/index.js');
+      const { Worker: WorkerModel } = await import('../models/index.js');
+      const { successResponse, notFoundResponse } = await import('../utils/response.util.js');
+      
+      const worker = await findWorkerByUserId(req.user.id);
+      if (!worker) {
+        return notFoundResponse(res, 'Worker profile not found');
+      }
+
+      const pendingRequests = await WorkerRequest.find({
+        workerId: worker._id,
+        status: 'pending',
+        workerNotificationRead: false
+      })
+        .sort({ createdAt: -1 })
+        .lean();
+
+      return successResponse(res, { 
+        notifications: pendingRequests,
+        unreadCount: pendingRequests.length 
+      });
+    } catch (error) {
+      const { errorResponse } = await import('../utils/response.util.js');
+      return errorResponse(res, error.message, 500);
+    }
+  }
+);
+
 export default router;
+

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useNavigate } from 'react-router-dom';
@@ -27,23 +27,26 @@ import { showToast } from '@/components/common';
 import { wageRecordSchema } from '@/utils/validators';
 import { formatCurrency } from '@/utils/formatters';
 import { z } from 'zod';
+import api from '@/services/api';
 
 type WageFormData = z.infer<typeof wageRecordSchema>;
 
-// Mock workers for search
-const mockWorkers = [
-  { id: 'W001', name: 'Rajesh Kumar', aadhaar: '****-****-1234', phone: '98765*****' },
-  { id: 'W002', name: 'Priya Sharma', aadhaar: '****-****-5678', phone: '98764*****' },
-  { id: 'W003', name: 'Mohammed Ali', aadhaar: '****-****-9012', phone: '98763*****' },
-  { id: 'W004', name: 'Lakshmi Devi', aadhaar: '****-****-3456', phone: '98762*****' },
-];
+interface WorkerOption {
+  id: string;
+  name: string;
+  idHash?: string;
+  maskedAadhaar?: string;
+  phone?: string;
+}
 
 const RecordWage: React.FC = () => {
   const navigate = useNavigate();
   const [isLoading, setIsLoading] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedWorker, setSelectedWorker] = useState<typeof mockWorkers[0] | null>(null);
+  const [workers, setWorkers] = useState<WorkerOption[]>([]);
+  const [workersLoading, setWorkersLoading] = useState(false);
+  const [selectedWorker, setSelectedWorker] = useState<WorkerOption | null>(null);
   const [showWorkerSearch, setShowWorkerSearch] = useState(false);
   const [transactionHash, setTransactionHash] = useState('');
 
@@ -60,23 +63,54 @@ const RecordWage: React.FC = () => {
 
   const amount = watch('amount');
 
-  const filteredWorkers = mockWorkers.filter(
+  useEffect(() => {
+    const fetchWorkers = async () => {
+      try {
+        setWorkersLoading(true);
+        const response = await api.get('/employers/profile/workers/detailed', {
+          params: { sortBy: 'name', order: 'asc' }
+        }) as { data: { workers: WorkerOption[] } };
+        setWorkers(response.data.workers || []);
+      } catch (error) {
+        showToast.error('Failed to load workers');
+      } finally {
+        setWorkersLoading(false);
+      }
+    };
+
+    fetchWorkers();
+  }, []);
+
+  const filteredWorkers = workers.filter(
     (w) =>
-      w.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      w.id.toLowerCase().includes(searchQuery.toLowerCase())
+      (w.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (w.idHash || '').toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const onSubmit = async (_data: WageFormData) => {
+  const onSubmit = async (data: WageFormData) => {
     if (!selectedWorker) {
       showToast.error('Please select a worker');
       return;
     }
 
+    if (!selectedWorker.idHash) {
+      showToast.error('Selected worker is missing an ID hash');
+      return;
+    }
+
     setIsLoading(true);
     try {
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-      const hash = '0x' + Math.random().toString(16).substring(2, 66);
-      setTransactionHash(hash);
+      const response = await api.post('/wages', {
+        workerIdHash: selectedWorker.idHash,
+        amount: data.amount,
+        paymentMethod: data.paymentMethod,
+        description: data.description,
+        jobType: data.workType,
+        date: data.paymentDate
+      }) as { data: { transaction?: { blockchainTxId?: string; referenceNumber?: string } } };
+
+      const tx = response.data.transaction;
+      setTransactionHash(tx?.blockchainTxId || tx?.referenceNumber || '');
       setShowSuccess(true);
       showToast.success('Wage record submitted to blockchain');
     } catch (error) {
@@ -187,7 +221,9 @@ const RecordWage: React.FC = () => {
                         </div>
                         <div>
                           <p className="font-medium text-gray-900">{selectedWorker.name}</p>
-                          <p className="text-sm text-gray-500">ID: {selectedWorker.id} • Aadhaar: {selectedWorker.aadhaar}</p>
+                          <p className="text-sm text-gray-500">
+                            ID: {selectedWorker.idHash || 'N/A'} • Aadhaar: {selectedWorker.maskedAadhaar || 'N/A'}
+                          </p>
                         </div>
                       </div>
                       <Button
@@ -376,6 +412,9 @@ const RecordWage: React.FC = () => {
             leftIcon={<Search className="h-4 w-4" />}
           />
           <div className="max-h-96 overflow-y-auto space-y-2">
+            {workersLoading && (
+              <p className="text-center text-gray-500 py-6">Loading workers...</p>
+            )}
             {filteredWorkers.map((worker) => (
               <div
                 key={worker.id}
@@ -392,12 +431,12 @@ const RecordWage: React.FC = () => {
                 <div className="flex-1">
                   <p className="font-medium text-gray-900">{worker.name}</p>
                   <p className="text-sm text-gray-500">
-                    ID: {worker.id} • Aadhaar: {worker.aadhaar}
+                    ID: {worker.idHash || 'N/A'} • Aadhaar: {worker.maskedAadhaar || 'N/A'}
                   </p>
                 </div>
               </div>
             ))}
-            {filteredWorkers.length === 0 && (
+            {!workersLoading && filteredWorkers.length === 0 && (
               <p className="text-center text-gray-500 py-8">No workers found</p>
             )}
           </div>
