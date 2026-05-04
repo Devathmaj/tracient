@@ -98,6 +98,9 @@ export const workerRegistrationSchema = z.object({
   employmentType: z.enum(['formal', 'informal']),
   isFarmer: z.boolean().optional(),
   kccLimit: z.number().min(0).optional(),
+  termsAccepted: z.boolean().refine((value) => value === true, {
+    message: 'You must accept the Terms of Service and Privacy Policy'
+  })
 }).refine((data) => data.password === data.confirmPassword, {
   message: 'Passwords do not match',
   path: ['confirmPassword'],

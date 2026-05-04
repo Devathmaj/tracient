@@ -40,7 +40,7 @@ const LoginForm: React.FC = () => {
         navigate('/', { replace: true });
       }
     } catch (err: any) {
-      setError(err.message || err.response?.data?.message || 'Invalid credentials. Please try again.');
+      setError('Invalid username or password.');
     }
   };
 

@@ -8,6 +8,7 @@ import * as welfareClassificationController from '../controllers/welfareClassifi
 import { authenticate } from '../middleware/auth.middleware.js';
 import { authorize, govOnly, adminOnly } from '../middleware/role.middleware.js';
 import { validate, validateObjectId, validatePagination } from '../middleware/validation.middleware.js';
+import { Worker } from '../models/index.js';
 import {
   createWorkerValidator,
   updateWorkerValidator,

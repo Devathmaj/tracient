@@ -15,6 +15,8 @@ const ForgotPassword = React.lazy(() => import('./pages/auth/ForgotPassword'));
 
 // Public Pages
 const Home = React.lazy(() => import('./pages/Home'));
+const Terms = React.lazy(() => import('./pages/Terms'));
+const Privacy = React.lazy(() => import('./pages/Privacy'));
 const NotFound = React.lazy(() => import('./pages/NotFound'));
 const Unauthorized = React.lazy(() => import('./pages/Unauthorized'));
 
@@ -81,6 +83,8 @@ const App: React.FC = () => {
         <Routes>
         {/* Public Routes */}
         <Route path={ROUTES.HOME} element={<Home />} />
+        <Route path="/terms" element={<Terms />} />
+        <Route path="/privacy" element={<Privacy />} />
         <Route path={ROUTES.UNAUTHORIZED} element={<Unauthorized />} />
         
         {/* Auth Routes */}

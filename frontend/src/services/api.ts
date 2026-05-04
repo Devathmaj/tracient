@@ -16,6 +16,14 @@ const PUBLIC_ENDPOINTS = [
   'workers/qr/deposit'
 ];
 
+const AUTH_ENDPOINTS = [
+  'auth/login',
+  'auth/register',
+  'auth/refresh-token',
+  'auth/forgot-password',
+  'auth/reset-password'
+];
+
 // Request interceptor - Add auth token
 api.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
@@ -49,10 +57,14 @@ api.interceptors.response.use(
     const isPublicEndpoint = PUBLIC_ENDPOINTS.some(endpoint => 
       requestUrl.includes(endpoint)
     );
+
+    const isAuthEndpoint = AUTH_ENDPOINTS.some(endpoint =>
+      requestUrl.includes(endpoint)
+    );
     
     if (error.response?.status === 401) {
       // Only redirect to login if this is NOT a public endpoint
-      if (!isPublicEndpoint) {
+      if (!isPublicEndpoint && !isAuthEndpoint) {
         // Token expired or invalid - remove all auth tokens
         localStorage.removeItem('accessToken');
         localStorage.removeItem('refreshToken');
@@ -64,7 +76,7 @@ api.interceptors.response.use(
     
     if (error.response?.status === 403) {
       // Forbidden - redirect to unauthorized (only for non-public endpoints)
-      if (!isPublicEndpoint) {
+      if (!isPublicEndpoint && !isAuthEndpoint) {
         window.location.href = '/unauthorized';
       }
     }

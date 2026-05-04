@@ -27,6 +27,18 @@ const findEmployerByUserId = async (userId) => {
   return employer;
 };
 
+const findWorkerByUserId = async (userId) => {
+  let worker = await Worker.findOne({ userId });
+  if (!worker) {
+    worker = await Worker.findOne({ user: userId });
+    if (worker && !worker.userId) {
+      worker.userId = userId;
+      await worker.save();
+    }
+  }
+  return worker;
+};
+
 // Middleware to ensure employer profile exists for dual-role users
 const ensureEmployerProfile = asyncHandler(async (req, res, next) => {
   // Skip for the apply route itself to avoid loops
@@ -1173,7 +1185,7 @@ router.post(
       }
 
       // Find worker profile from user
-      const workerProfile = await Worker.findOne({ userId: workerUser._id });
+      const workerProfile = await findWorkerByUserId(workerUser._id);
       if (!workerProfile) {
         return errorResponse(res, 'Worker profile not found for this user.', 404);
       }
@@ -1222,6 +1234,13 @@ router.post(
     }
 
     // Worker found directly by phone
+    if (!worker.userId) {
+      const workerUser = await User.findOne({ phone: { $regex: phoneRegexString, $options: 'i' }, role: ROLES.WORKER });
+      if (workerUser) {
+        worker.userId = workerUser._id;
+        await worker.save();
+      }
+    }
     // Check if request already exists
     const existingRequest = await WorkerRequest.findOne({
       employerId: employer._id,

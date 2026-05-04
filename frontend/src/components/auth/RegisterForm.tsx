@@ -13,7 +13,7 @@ import {
   CreditCard,
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
-import { Button, Input, Alert } from '@/components/common';
+import { Button, Input, Alert, Modal } from '@/components/common';
 import { registerWorkerSchema } from '@/utils/validators';
 import { ROUTES } from '@/utils/constants';
 import { z } from 'zod';
@@ -30,6 +30,8 @@ const RegisterForm: React.FC = () => {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [employmentType, setEmploymentType] = useState<'formal' | 'informal'>('informal');
   const [isFarmer, setIsFarmer] = useState(false);
+  const [showTerms, setShowTerms] = useState(false);
+  const [showPrivacy, setShowPrivacy] = useState(false);
 
   const {
     register,
@@ -43,6 +45,7 @@ const RegisterForm: React.FC = () => {
     defaultValues: {
       employmentType: 'informal',
       isFarmer: false,
+      termsAccepted: false,
     }
   });
 
@@ -309,18 +312,30 @@ const RegisterForm: React.FC = () => {
             type="checkbox"
             id="terms-user"
             className="mt-1 h-4 w-4 text-primary-600 border-gray-300 rounded focus:ring-primary-500"
+            {...register('termsAccepted')}
           />
           <label htmlFor="terms-user" className="ml-2 text-sm text-gray-600">
             I agree to the{' '}
-            <Link to="/terms" className="text-primary-600 hover:text-primary-500">
+            <button
+              type="button"
+              onClick={() => setShowTerms(true)}
+              className="text-primary-600 hover:text-primary-500"
+            >
               Terms of Service
-            </Link>{' '}
+            </button>{' '}
             and{' '}
-            <Link to="/privacy" className="text-primary-600 hover:text-primary-500">
+            <button
+              type="button"
+              onClick={() => setShowPrivacy(true)}
+              className="text-primary-600 hover:text-primary-500"
+            >
               Privacy Policy
-            </Link>
+            </button>
           </label>
         </div>
+        {errors.termsAccepted && (
+          <p className="text-sm text-red-600">{errors.termsAccepted.message}</p>
+        )}
 
         <Button type="submit" className="w-full" size="lg" isLoading={isLoading}>
           Create Account
@@ -338,6 +353,105 @@ const RegisterForm: React.FC = () => {
       <p className="text-center text-xs text-gray-500">
         Government and Admin accounts are created by system administrators.
       </p>
+
+      <Modal
+        isOpen={showTerms}
+        onClose={() => setShowTerms(false)}
+        title="Terms of Service"
+        size="full"
+      >
+        <div className="space-y-5 text-gray-700">
+          <section>
+            <h3 className="text-lg font-semibold text-gray-900">1. Overview</h3>
+            <p className="mt-2">
+              TRACIENT provides a secure platform for recording wage payments, verifying worker
+              identities, and supporting welfare distribution with blockchain-backed records. By
+              using the service, you agree to these Terms.
+            </p>
+          </section>
+          <section>
+            <h3 className="text-lg font-semibold text-gray-900">2. Eligibility</h3>
+            <p className="mt-2">
+              You must provide accurate registration details. Employers and workers must be
+              authorized to use the platform. Government and admin accounts are provisioned by
+              system administrators.
+            </p>
+          </section>
+          <section>
+            <h3 className="text-lg font-semibold text-gray-900">3. Acceptable Use</h3>
+            <p className="mt-2">
+              You agree not to misuse the service, attempt unauthorized access, or submit false
+              wage or identity information. Abuse may lead to account suspension.
+            </p>
+          </section>
+          <section>
+            <h3 className="text-lg font-semibold text-gray-900">4. Data Integrity</h3>
+            <p className="mt-2">
+              Wage entries and related records may be stored on an immutable ledger. You are
+              responsible for verifying details before submission.
+            </p>
+          </section>
+          <section>
+            <h3 className="text-lg font-semibold text-gray-900">5. Availability</h3>
+            <p className="mt-2">
+              We strive for high availability, but service interruptions may occur due to
+              maintenance or network issues. TRACIENT is not liable for indirect damages.
+            </p>
+          </section>
+          <section>
+            <h3 className="text-lg font-semibold text-gray-900">6. Contact</h3>
+            <p className="mt-2">
+              For support, contact your system administrator or program office.
+            </p>
+          </section>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={showPrivacy}
+        onClose={() => setShowPrivacy(false)}
+        title="Privacy Policy"
+        size="full"
+      >
+        <div className="space-y-5 text-gray-700">
+          <section>
+            <h3 className="text-lg font-semibold text-gray-900">1. Information We Collect</h3>
+            <p className="mt-2">
+              We collect identity and contact data needed to manage wage records, including name,
+              phone number, email, and government identifiers. Employers may submit worker payment
+              details.
+            </p>
+          </section>
+          <section>
+            <h3 className="text-lg font-semibold text-gray-900">2. How We Use Data</h3>
+            <p className="mt-2">
+              Data is used to verify identities, record payments, detect anomalies, and support
+              program reporting. Blockchain records are immutable once submitted.
+            </p>
+          </section>
+          <section>
+            <h3 className="text-lg font-semibold text-gray-900">3. Sharing</h3>
+            <p className="mt-2">
+              We share data only with authorized government or program administrators and only for
+              legitimate operational or compliance purposes.
+            </p>
+          </section>
+          <section>
+            <h3 className="text-lg font-semibold text-gray-900">4. Security</h3>
+            <p className="mt-2">
+              We use access controls, audit logs, and encryption where applicable. Users should
+              keep their credentials secure and report suspicious activity.
+            </p>
+          </section>
+          <section>
+            <h3 className="text-lg font-semibold text-gray-900">5. Your Choices</h3>
+            <p className="mt-2">
+              You can review and update your profile details. Some ledger entries cannot be
+              altered once recorded.
+            </p>
+          </section>
+        </div>
+      </Modal>
     </div>
   );
 };
