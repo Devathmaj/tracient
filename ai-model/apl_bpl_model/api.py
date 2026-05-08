@@ -542,6 +542,7 @@ anomaly_model_loaded = anomaly_detector.load()
 # ============================================================================
 
 @app.route('/health', methods=['GET'])
+@app.route('/api/anomaly/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
     return jsonify({
@@ -687,6 +688,7 @@ def batch_classify():
 # ============================================================================
 
 @app.route('/detect-anomaly', methods=['POST'])
+@app.route('/api/anomaly/detect-anomaly', methods=['POST'])
 def detect_anomaly():
     """
     Detect anomalies in income patterns for a single worker
@@ -778,6 +780,7 @@ def detect_anomaly():
 
 
 @app.route('/batch-detect-anomaly', methods=['POST'])
+@app.route('/api/anomaly/batch-detect-anomaly', methods=['POST'])
 def batch_detect_anomaly():
     """
     Detect anomalies for multiple workers at once

@@ -722,12 +722,12 @@ router.get(
     if (connectionStatus.connected) {
       try {
         const startTime = Date.now();
-        const result = await evaluateTransaction('ReadWage', 'WAGE001');
+        const result = await evaluateTransaction('WageExists', 'WAGE001');
         // evaluateTransaction already returns parsed JSON or string
-        logger.info(`[Blockchain Test] ReadWage result type: ${typeof result}`);
+        logger.info(`[Blockchain Test] WageExists result type: ${typeof result}`);
         
         tests.push({
-          name: 'Query Wage (ReadWage WAGE001)',
+          name: 'Query Wage (WageExists WAGE001)',
           status: 'passed',
           executionTime: Date.now() - startTime,
           result: result,
@@ -736,7 +736,7 @@ router.get(
         logger.info(`[Blockchain Test] Query wage passed`);
       } catch (error) {
         tests.push({
-          name: 'Query Wage (ReadWage WAGE001)',
+          name: 'Query Wage (WageExists WAGE001)',
           status: error.message.includes('not found') ? 'passed (no data)' : 'failed',
           error: error.message
         });

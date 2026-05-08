@@ -78,10 +78,9 @@ const getNavItems = (role: UserRole, isAlsoEmployer: boolean, userId: string): N
       return [
         { label: 'Dashboard', icon: LayoutDashboard, path: '/government/dashboard' },
         { label: 'Analytics', icon: BarChart3, path: '/government/analytics' },
-        { label: 'Anomaly Alerts', icon: AlertTriangle, path: '/government/anomalies', badge: 3 },
+        { label: 'Anomaly Alerts', icon: AlertTriangle, path: '/government/anomalies',},
         { label: 'Policy Config', icon: Settings, path: '/government/policy' },
         { label: 'Welfare Schemes', icon: Heart, path: '/government/welfare' },
-        { label: 'Audit Logs', icon: FileText, path: '/government/audit-logs' },
       ];
     case 'admin':
       return [

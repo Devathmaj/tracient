@@ -1,7 +1,7 @@
 /**
  * Government Controller
  */
-import { Worker, Employer, WageRecord, AnomalyAlert, WelfareScheme, AuditLog, ClassificationOverride, PolicyConfig, SystemMetadata } from '../models/index.js';
+import { Worker, Employer, WageRecord, AnomalyAlert, WelfareScheme, AuditLog, ClassificationOverride, PolicyConfig, SystemMetadata, Family } from '../models/index.js';
 import { successResponse, errorResponse, notFoundResponse, paginatedResponse } from '../utils/response.util.js';
 import { paginateQuery, paginateAggregate } from '../utils/pagination.util.js';
 import { calculateBPLStatus } from '../utils/bpl.util.js';
@@ -96,13 +96,15 @@ export const getDashboardStats = async (req, res) => {
       verifiedWorkers,
       pendingVerifications,
       bplWorkers,
+      aplWorkers,
       totalTransactions,
       pendingAnomalies
     ] = await Promise.all([
       Worker.countDocuments({ isActive: true }),
       Worker.countDocuments({ verificationStatus: VERIFICATION_STATUS.VERIFIED }),
       Worker.countDocuments({ verificationStatus: VERIFICATION_STATUS.PENDING }),
-      Worker.countDocuments({ incomeCategory: INCOME_CATEGORIES.BPL }),
+      Family.countDocuments({ classification: 'BPL' }),
+      Family.countDocuments({ classification: 'APL' }),
       WageRecord.countDocuments({ status: 'completed' }),
       AnomalyAlert.countDocuments({ status: { $in: ['pending', 'investigating'] } })
     ]);
@@ -120,7 +122,7 @@ export const getDashboardStats = async (req, res) => {
         verified: verifiedWorkers,
         pendingVerification: pendingVerifications,
         bpl: bplWorkers,
-        apl: totalWorkers - bplWorkers
+        apl: aplWorkers
       },
       transactions: {
         total: totalTransactions,
@@ -831,6 +833,7 @@ export const runAnomalyScan = async (req, res) => {
     
     // Prepare worker data for batch anomaly detection
     const workersData = [];
+    const lightScanWorkers = [];
     
     for (const worker of workers) {
       // Get worker's wage records for pattern analysis
@@ -843,12 +846,12 @@ export const runAnomalyScan = async (req, res) => {
         .select('amount createdAt paymentMode verificationStatus employer isVerified')
         .lean();
       
-      if (wageRecords.length < 2) continue; // Need at least 2 records for pattern analysis
-      
       // Calculate pattern features
       const amounts = wageRecords.map(w => w.amount);
-      const mean = amounts.reduce((a, b) => a + b, 0) / amounts.length;
-      const variance = amounts.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / amounts.length;
+      const mean = amounts.length > 0 ? amounts.reduce((a, b) => a + b, 0) / amounts.length : 0;
+      const variance = amounts.length > 0
+        ? amounts.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / amounts.length
+        : 0;
       const std = Math.sqrt(variance);
       const cv = mean > 0 ? std / mean : 0;
       
@@ -886,7 +889,7 @@ export const runAnomalyScan = async (req, res) => {
       const cashDeposits = wageRecords.filter(w => w.paymentMode === 'cash_deposit').length;
       const cashDepositRate = wageRecords.length > 0 ? cashDeposits / wageRecords.length : 0;
       
-      workersData.push({
+      const workerPayload = {
         worker_id: worker._id.toString(),
         worker_data: {
           sector: worker.sector || 'other',
@@ -899,12 +902,14 @@ export const runAnomalyScan = async (req, res) => {
           weekend_pct: weekendPct,
           night_hours_pct: 0.05, // Default - would need timestamp analysis
           round_amount_pct: roundAmountPct,
-          near_50k_pct: wageRecords.filter(w => w.amount >= 45000 && w.amount < 50000).length / wageRecords.length,
+          near_50k_pct: wageRecords.length > 0
+            ? wageRecords.filter(w => w.amount >= 45000 && w.amount < 50000).length / wageRecords.length
+            : 0,
           num_unique_sources: uniqueEmployers,
           source_concentration: uniqueEmployers > 0 ? 1 / uniqueEmployers : 1,
           unverified_rate: unverifiedRate,
           velocity_change: 1.0,
-          burst_ratio: wageRecords.length > 0 ? Math.max(...amounts) / mean : 1,
+          burst_ratio: mean > 0 && amounts.length > 0 ? Math.max(...amounts) / mean : 1,
           cash_deposit_rate: cashDepositRate
         },
         income_data: {
@@ -913,29 +918,57 @@ export const runAnomalyScan = async (req, res) => {
           max_deviation_from_mean: maxDeviation,
           monthly_incomes: amounts
         }
-      });
-    }
-    
-    if (workersData.length === 0) {
-      return successResponse(res, {
-        message: 'No workers with sufficient wage data to scan',
-        totalScanned: 0,
-        anomaliesFound: 0,
-        newAlerts: []
-      });
+      };
+
+      if (wageRecords.length < 2) {
+        lightScanWorkers.push(workerPayload);
+      } else {
+        workersData.push(workerPayload);
+      }
     }
     
     // Import AI service and run batch detection
-    const { batchDetectAnomalies } = await import('../services/ai.service.js');
-    const scanResult = await batchDetectAnomalies(workersData);
+    const { batchDetectAnomalies, ruleBasedAnomalyDetection } = await import('../services/ai.service.js');
+    let combinedResults = [];
+    let detectionMethod = 'rules_only';
     
-    if (!scanResult.success) {
-      return errorResponse(res, scanResult.error || 'Anomaly scan failed', 500);
+    if (workersData.length > 0) {
+      const scanResult = await batchDetectAnomalies(workersData);
+      
+      if (!scanResult.success) {
+        return errorResponse(res, scanResult.error || 'Anomaly scan failed', 500);
+      }
+      
+      combinedResults = (scanResult.results || []).map(result => ({
+        ...result,
+        detection_method: scanResult.detectionMethod
+      }));
+      detectionMethod = scanResult.detectionMethod || 'rules_only';
     }
+    
+    if (lightScanWorkers.length > 0) {
+      const lightResults = lightScanWorkers.map(worker => {
+        const ruleResult = ruleBasedAnomalyDetection(worker);
+        return {
+          worker_id: worker.worker_id || 'unknown',
+          is_anomaly: ruleResult.isAnomaly,
+          anomaly_score: ruleResult.confidence,
+          severity: ruleResult.isAnomaly ? 'medium' : 'low',
+          anomaly_types: ruleResult.type ? [ruleResult.type] : [],
+          detection_method: 'rules_only'
+        };
+      });
+      
+      combinedResults = combinedResults.concat(lightResults);
+      detectionMethod = workersData.length > 0 ? 'mixed' : 'rules_only';
+    }
+    
+    const totalScanned = workers.length;
+    const anomaliesFound = combinedResults.filter(r => r.is_anomaly).length;
     
     // Create anomaly alerts for detected anomalies
     const newAlerts = [];
-    for (const result of scanResult.results) {
+    for (const result of combinedResults) {
       if (result.is_anomaly) {
         // Check if alert already exists for this worker
         const existingAlert = await AnomalyAlert.findOne({
@@ -945,13 +978,16 @@ export const runAnomalyScan = async (req, res) => {
         });
         
         if (!existingAlert) {
+          const alertDetectionMethod = result.detection_method === 'ml_and_rules'
+            ? 'ai_model'
+            : 'rule_based';
           const alert = await AnomalyAlert.create({
             alertType: result.anomaly_types?.[0] || 'unusual_pattern',
             severity: result.severity || 'medium',
             entityType: 'worker',
             entityId: result.worker_id,
             workerId: result.worker_id,
-            detectionMethod: scanResult.detectionMethod === 'ml_and_rules' ? 'ai_model' : 'rule_based',
+            detectionMethod: alertDetectionMethod,
             confidence: result.anomaly_score || 50,
             status: 'pending',
             title: `Anomaly Detected: ${result.anomaly_types?.[0] || 'unusual_pattern'}`,
@@ -973,24 +1009,24 @@ export const runAnomalyScan = async (req, res) => {
       action: 'anomaly_scan',
       category: 'system',
       resourceType: 'anomaly_scan',
-      description: `Anomaly scan completed: ${scanResult.totalScanned} workers scanned, ${scanResult.anomaliesFound} anomalies found`,
+      description: `Anomaly scan completed: ${totalScanned} workers scanned, ${anomaliesFound} anomalies found`,
       metadata: {
-        totalScanned: scanResult.totalScanned,
-        anomaliesFound: scanResult.anomaliesFound,
+        totalScanned,
+        anomaliesFound,
         newAlertsCreated: newAlerts.length,
-        detectionMethod: scanResult.detectionMethod
+        detectionMethod
       },
       success: true
     });
     
-    logger.info(`Anomaly scan completed: ${scanResult.totalScanned} scanned, ${scanResult.anomaliesFound} anomalies, ${newAlerts.length} new alerts`);
+    logger.info(`Anomaly scan completed: ${totalScanned} scanned, ${anomaliesFound} anomalies, ${newAlerts.length} new alerts`);
     
     return successResponse(res, {
       message: 'Anomaly scan completed successfully',
-      totalScanned: scanResult.totalScanned,
-      anomaliesFound: scanResult.anomaliesFound,
+      totalScanned,
+      anomaliesFound,
       newAlertsCreated: newAlerts.length,
-      detectionMethod: scanResult.detectionMethod,
+      detectionMethod,
       newAlerts: newAlerts.map(a => ({
         id: a._id,
         alertType: a.alertType,
@@ -1253,6 +1289,9 @@ export const deleteClassificationPolicy = async (req, res) => {
       });
       
       logger.info(`Classification policy permanently deleted: ${policyId} by user ${req.user._id}`);
+
+      await policyScreeningService.markPoliciesModified();
+      await policyScreeningService.bulkRescreen(req.user._id);
       
       return successResponse(res, null, 'Policy permanently deleted');
     }
@@ -1271,6 +1310,8 @@ export const deleteClassificationPolicy = async (req, res) => {
     
     // Mark that policies have been modified
     await policyScreeningService.markPoliciesModified();
+
+    await policyScreeningService.bulkRescreen(req.user._id);
     
     await AuditLog.create({
       userId: req.user._id,

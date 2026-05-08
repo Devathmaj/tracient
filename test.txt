@@ -1,0 +1,21 @@
+docker ps
+docker exec -it peer0.org1.example.com bash
+export CORE_PEER_LOCALMSPID=Org1MSP
+export CORE_PEER_ADDRESS=peer0.org1.example.com:7051
+export CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp
+peer channel list
+
+
+peer chaincode query -C mychannel -n tracient \
+-c '{"Args":["ReadWage","WAGE001"]}'
+
+peer chaincode query -C mychannel -n tracient \
+-c '{"Args":["QueryWagesByEmployer","employer-001"]}'
+
+peer chaincode query -C mychannel -n tracient \
+-c '{"Args":["GetAuditLogs","{\"limit\":50}"]}'
+
+peer channel getinfo -c mychannel
+
+peer channel fetch 0 block0.block -c mychannel -o orderer.example.com:7050
+

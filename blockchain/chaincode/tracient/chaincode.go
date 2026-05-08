@@ -1122,7 +1122,19 @@ func (s *SmartContract) GetPovertyThreshold(ctx contractapi.TransactionContextIn
 	}
 
 	if payload == nil {
-		return nil, fmt.Errorf("poverty threshold not found for %s/%s", state, category)
+		defaultAmount := 32000.0
+		if category == "APL" {
+			defaultAmount = 100000.0
+		}
+
+		return &PovertyThreshold{
+			DocType:   "threshold",
+			State:     "DEFAULT",
+			Category:  category,
+			Amount:    defaultAmount,
+			SetBy:     "system-default",
+			UpdatedAt: GetTxTimestampRFC3339(ctx),
+		}, nil
 	}
 
 	threshold := new(PovertyThreshold)

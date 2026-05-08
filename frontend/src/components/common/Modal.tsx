@@ -65,7 +65,7 @@ const Modal: React.FC<ModalProps> = ({
       {/* Modal */}
       <div
         className={cn(
-          'relative z-50 w-full mx-4 bg-white rounded-xl shadow-xl animate-slide-up',
+          'relative z-50 w-full mx-4 bg-white rounded-xl shadow-xl animate-slide-up flex max-h-[90vh] flex-col',
           sizes[size]
         )}
         role="dialog"
@@ -101,7 +101,7 @@ const Modal: React.FC<ModalProps> = ({
         )}
 
         {/* Content */}
-        <div className="p-6 max-h-[60vh] overflow-y-auto scrollbar-thin">
+        <div className="p-6 flex-1 overflow-y-auto scrollbar-thin">
           {children}
         </div>
 

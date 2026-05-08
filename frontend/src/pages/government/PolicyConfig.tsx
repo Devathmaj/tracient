@@ -101,6 +101,7 @@ const PolicyConfiguration: React.FC = () => {
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showApplyModal, setShowApplyModal] = useState(false);
+  const [isHardDelete, setIsHardDelete] = useState(false);
   const [selectedPolicy, setSelectedPolicy] = useState<ClassificationPolicy | null>(null);
   const [applyResult, setApplyResult] = useState<any>(null);
   
@@ -262,13 +263,14 @@ const PolicyConfiguration: React.FC = () => {
     setIsSubmitting(true);
     try {
       await api.delete(`/government/classification-policies/${selectedPolicy.policyId}`, {
-        data: { reason: formReason || 'Policy deleted' }
+        data: { reason: formReason || 'Policy deleted', hardDelete: isHardDelete }
       });
       
-      toast.success('Policy deactivated successfully');
+      toast.success(isHardDelete ? 'Policy deleted permanently' : 'Policy deactivated successfully');
       setShowDeleteModal(false);
       setSelectedPolicy(null);
       setFormReason('');
+      setIsHardDelete(false);
       fetchData();
     } catch (error: any) {
       toast.error(error.response?.data?.message || 'Failed to delete policy');
@@ -477,7 +479,7 @@ const PolicyConfiguration: React.FC = () => {
                           variant="outline" 
                           size="sm" 
                           className="text-red-600 hover:bg-red-50"
-                          onClick={() => { setSelectedPolicy(policy); setFormReason(''); setShowDeleteModal(true); }}
+                          onClick={() => { setSelectedPolicy(policy); setFormReason(''); setIsHardDelete(false); setShowDeleteModal(true); }}
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>
@@ -751,17 +753,31 @@ const PolicyConfiguration: React.FC = () => {
       {/* Delete Confirmation Modal */}
       <Modal
         isOpen={showDeleteModal}
-        onClose={() => { setShowDeleteModal(false); setSelectedPolicy(null); }}
-        title="Deactivate Policy"
+        onClose={() => { setShowDeleteModal(false); setSelectedPolicy(null); setIsHardDelete(false); }}
+        title={isHardDelete ? 'Delete Policy' : 'Deactivate Policy'}
       >
         {selectedPolicy && (
           <div className="space-y-4">
             <p className="text-gray-600">
-              Are you sure you want to deactivate the policy <strong>{selectedPolicy.name}</strong>?
+              Are you sure you want to {isHardDelete ? 'delete' : 'deactivate'} the policy <strong>{selectedPolicy.name}</strong>?
             </p>
-            <p className="text-sm text-gray-500">
-              This policy will no longer be applied to new or existing classifications.
+            <p className={`text-sm ${isHardDelete ? 'text-red-600' : 'text-gray-500'}`}>
+              {isHardDelete
+                ? 'This will permanently delete the policy and cannot be undone.'
+                : 'This policy will no longer be applied to new or existing classifications.'}
             </p>
+            <label className="flex items-start gap-2 text-sm text-gray-700">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4"
+                checked={isHardDelete}
+                onChange={(e) => setIsHardDelete(e.target.checked)}
+              />
+              <span>
+                Permanently delete policy (cannot be undone)
+                <span className="block text-xs text-gray-500">Use this only if you need to remove it completely.</span>
+              </span>
+            </label>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Reason (optional)
@@ -771,11 +787,11 @@ const PolicyConfiguration: React.FC = () => {
                 rows={2}
                 value={formReason}
                 onChange={(e) => setFormReason(e.target.value)}
-                placeholder="Reason for deactivation"
+                placeholder={isHardDelete ? 'Reason for permanent deletion' : 'Reason for deactivation'}
               />
             </div>
             <div className="flex justify-end gap-3 pt-4">
-              <Button variant="outline" onClick={() => { setShowDeleteModal(false); setSelectedPolicy(null); }}>
+              <Button variant="outline" onClick={() => { setShowDeleteModal(false); setSelectedPolicy(null); setIsHardDelete(false); }}>
                 Cancel
               </Button>
               <Button
@@ -785,7 +801,7 @@ const PolicyConfiguration: React.FC = () => {
                 isLoading={isSubmitting}
               >
                 <Trash2 className="h-4 w-4 mr-2" />
-                Deactivate Policy
+                {isHardDelete ? 'Delete Permanently' : 'Deactivate Policy'}
               </Button>
             </div>
           </div>
@@ -954,7 +970,7 @@ const PolicyForm: React.FC<PolicyFormProps> = ({
   }, {} as Record<string, PolicyField[]>);
 
   return (
-    <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
+    <div className="space-y-4 pr-2">
       {/* Basic Info */}
       <div className="grid grid-cols-2 gap-4">
         <Input

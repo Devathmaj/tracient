@@ -102,6 +102,50 @@ const policyTargetsClassificationCriteria = (policy, classificationResult) => {
   );
 };
 
+const buildBaseClassificationResult = (family) => {
+  const hasInclusion = !!family.secc_has_inclusion;
+  const hasExclusion = !!family.secc_has_exclusion;
+  const seccClassification = family.secc_classification || null;
+  const seccReason = family.secc_reason || '';
+  const mlClassification = family.ml_classification || null;
+  const mlConfidence = typeof family.classification_confidence === 'number'
+    ? family.classification_confidence
+    : 0;
+
+  let classification = family.classification || 'pending';
+  let classificationReason = family.classification_reason || '';
+
+  if (hasInclusion) {
+    classification = 'BPL';
+    classificationReason = seccReason || 'Automatic inclusion criteria met';
+  } else if (hasExclusion) {
+    classification = 'APL';
+    classificationReason = seccReason || 'Automatic exclusion criteria met';
+  } else if (mlClassification) {
+    classification = mlClassification;
+    classificationReason = `ML model prediction (${mlConfidence}% confidence)`;
+  } else if (seccClassification) {
+    classification = seccClassification;
+    classificationReason = seccReason || 'SECC classification';
+  }
+
+  return {
+    classification,
+    classification_reason: classificationReason,
+    secc_classification: seccClassification,
+    secc_reason: seccReason,
+    secc_has_exclusion: family.secc_has_exclusion,
+    secc_has_inclusion: family.secc_has_inclusion,
+    secc_deprivation_count: family.secc_deprivation_count,
+    secc_exclusion_met: family.secc_exclusion_met || [],
+    secc_inclusion_met: family.secc_inclusion_met || [],
+    secc_deprivation_met: family.secc_deprivation_met || [],
+    ml_classification: mlClassification,
+    ml_bpl_probability: family.ml_bpl_probability,
+    ml_apl_probability: family.ml_apl_probability
+  };
+};
+
 /**
  * Screen a single classification result against active policies
  * @param {Object} classificationResult - The AI classification result
@@ -238,17 +282,7 @@ export const bulkRescreen = async (triggeredBy) => {
     
     // Get all active policies
     const activePolicies = await ClassificationOverride.getActivePolicies();
-    
-    if (!activePolicies || activePolicies.length === 0) {
-      return {
-        success: true,
-        message: 'No active policies to apply',
-        totalFamilies: 0,
-        reclassified: 0,
-        unchanged: 0,
-        errors: 0
-      };
-    }
+    const hasActivePolicies = !!(activePolicies && activePolicies.length > 0);
     
     // Get all classified families
     const families = await Family.find({
@@ -262,59 +296,48 @@ export const bulkRescreen = async (triggeredBy) => {
     
     for (const family of families) {
       try {
-        // Reconstruct the classification result from stored data
-        const storedClassificationResult = {
-          classification: family.classification,
-          classification_reason: family.classification_reason,
-          secc_classification: family.secc_classification,
-          secc_reason: family.secc_reason,
-          secc_has_exclusion: family.secc_has_exclusion,
-          secc_has_inclusion: family.secc_has_inclusion,
-          secc_deprivation_count: family.secc_deprivation_count,
-          secc_exclusion_met: family.secc_exclusion_met,
-          secc_inclusion_met: family.secc_inclusion_met,
-          secc_deprivation_met: family.secc_deprivation_met,
-          ml_classification: family.ml_classification,
-          ml_bpl_probability: family.ml_bpl_probability,
-          ml_apl_probability: family.ml_apl_probability
-        };
+        const baseClassificationResult = buildBaseClassificationResult(family);
+        const screenedResult = hasActivePolicies
+          ? await screenClassification(
+              baseClassificationResult,
+              family.toObject(),
+              activePolicies
+            )
+          : {
+              ...baseClassificationResult,
+              policy_screened: true,
+              policy_overrides_applied: []
+            };
+        const nextOverrides = screenedResult.policy_overrides_applied || [];
+        const currentOverrides = family.policy_overrides_applied || [];
+        const overridesChanged = JSON.stringify(nextOverrides) !== JSON.stringify(currentOverrides);
+        const classificationChanged = screenedResult.classification !== family.classification;
+        const reasonChanged = screenedResult.classification_reason !== family.classification_reason;
         
-        // Screen against policies
-        const screenedResult = await screenClassification(
-          storedClassificationResult,
-          family.toObject(),
-          activePolicies
-        );
-        
-        // Check if classification changed
-        if (screenedResult.classification !== family.classification) {
+        if (classificationChanged || reasonChanged || overridesChanged) {
           const oldClassification = family.classification;
           
           // Update the family record
           family.classification = screenedResult.classification;
           family.classification_reason = screenedResult.classification_reason;
-          family.policy_overrides_applied = screenedResult.policy_overrides_applied;
+          family.policy_overrides_applied = nextOverrides;
           family.last_policy_screening = new Date();
-          
-          // Update secc fields if modified
-          if (screenedResult.secc_exclusion_met) {
-            family.secc_exclusion_met = screenedResult.secc_exclusion_met;
-          }
-          if (screenedResult.secc_has_exclusion !== undefined) {
-            family.secc_has_exclusion = screenedResult.secc_has_exclusion;
-          }
           
           await family.save();
           
-          reclassified++;
-          reclassificationDetails.push({
-            ration_no: family.ration_no,
-            oldClassification,
-            newClassification: screenedResult.classification,
-            overridesApplied: screenedResult.policy_overrides_applied
-          });
-          
-          logger.info(`Family ${family.ration_no} reclassified from ${oldClassification} to ${screenedResult.classification}`);
+          if (classificationChanged) {
+            reclassified++;
+            reclassificationDetails.push({
+              ration_no: family.ration_no,
+              oldClassification,
+              newClassification: screenedResult.classification,
+              overridesApplied: nextOverrides
+            });
+            
+            logger.info(`Family ${family.ration_no} reclassified from ${oldClassification} to ${screenedResult.classification}`);
+          } else {
+            unchanged++;
+          }
         } else {
           unchanged++;
         }
@@ -333,7 +356,9 @@ export const bulkRescreen = async (triggeredBy) => {
       reclassified,
       unchanged,
       errors,
-      policiesApplied: activePolicies.map(p => ({ id: p.policyId, name: p.name }))
+      policiesApplied: hasActivePolicies
+        ? activePolicies.map(p => ({ id: p.policyId, name: p.name }))
+        : []
     });
     
     // Clear the policies modified flag

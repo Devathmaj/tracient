@@ -334,7 +334,7 @@ export const batchDetectAnomalies = async (workers) => {
  * Rule-based anomaly detection
  * Works with data from government controller's runAnomalyScan
  */
-const ruleBasedAnomalyDetection = (data) => {
+export const ruleBasedAnomalyDetection = (data) => {
   // Handle both old format and new format from runAnomalyScan
   const patternData = data.pattern_data || {};
   const incomeData = data.income_data || {};
